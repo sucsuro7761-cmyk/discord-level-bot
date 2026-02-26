@@ -302,15 +302,15 @@ async def top(interaction: discord.Interaction):
     )
 
     description = ""
-for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-    try:
-        # infoの中身が空だったり、level/xpが無い場合を防ぐ
-        level = info.get("level", 0)
-        xp = info.get("xp", 0)
-        description += f"**{i}位** <@{user_id}> - Lv{level} ({xp}XP)\n"
-    except Exception as e:
-        print(f"ランキング表示エラー: {user_id} / {e}")
-        continue
+    for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
+        try:
+            # infoの中身が空だったり、level/xpが無い場合を防ぐ
+            level = info.get("level", 0)
+            xp = info.get("xp", 0)
+            description += f"**{i}位** <@{user_id}> - Lv{level} ({xp}XP)\n"
+        except Exception as e:
+            print(f"ランキング表示エラー: {user_id} / {e}")
+            continue
 
     embed.description = description
 
