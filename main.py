@@ -208,15 +208,16 @@ async def on_voice_state_update(member, before, after):
                 }
 
             vc_xp = 10
-            data[user_id]["xp"] += vc_xp
+data[user_id]["xp"] += vc_xp
 
-            save_data(data)
+await check_level_up(
+    member,
+    member.voice.channel,
+    data,
+    user_id
+)
 
-            await check_level_up(
-                await member.guild.fetch_channel(member.voice.channel.id),
-                data,
-                user_id
-            )
+save_data(data)
 
     # VC退出時
     if before.channel and not after.channel:
