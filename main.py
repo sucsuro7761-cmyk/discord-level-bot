@@ -71,6 +71,12 @@ permanent_roles = {
     3: "PHOTO+"
 }
 
+weekly_roles = {
+    1: "🥇週間王者",
+    2: "🥈週間準王",
+    3: "🥉週間三位"
+}
+
 async def check_level_up(member, channel, data, user_id):
 
     guild = member.guild
@@ -135,11 +141,12 @@ async def on_message(message):
     data = load_data()
 
     if user_id not in data:
-        data[user_id] = {
-            "xp": 0,
-            "level": 1,
-            "last_daily": ""
-        }
+    data[user_id] = {
+        "xp": 0,
+        "level": 1,
+        "last_daily": "",
+        "weekly_xp": 0
+    }
 
     # =========================
     # デイリーボーナス（自動）
@@ -160,6 +167,8 @@ async def on_message(message):
     # =========================
     xp_gain = random.randint(5, 20)
     data[user_id]["xp"] += xp_gain
+    data[user_id]["weekly_xp"] += xp_gain
+    data[user_id]["weekly_xp"] += daily_bonus
 
     # レベルチェック
     await check_level_up(
@@ -203,14 +212,16 @@ async def on_voice_state_update(member, before, after):
             data = load_data()
 
             if user_id not in data:
-                data[user_id] = {
-                    "xp": 0,
-                    "level": 1,
-                    "last_daily": ""
-                }
+    data[user_id] = {
+        "xp": 0,
+        "level": 1,
+        "last_daily": "",
+        "weekly_xp": 0
+    }
 
             vc_xp = 10
             data[user_id]["xp"] += vc_xp
+            data[user_id]["weekly_xp"] += vc_xp
 
             await check_level_up(
                 member,
@@ -305,10 +316,66 @@ async def top(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# 週間三傑リセット処理
+# =========================
+async def weekly_reset():
+
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+
+        now = datetime.now()  # 日本時間基準
+
+        # 月曜日 0時
+        if now.weekday() == 0 and now.hour == 0:
+
+            data = load_data()
+
+            sorted_users = sorted(
+                data.items(),
+                key=lambda x: x[1].get("weekly_xp", 0),
+                reverse=True
+            )
+
+            if not bot.guilds:
+                return
+
+            guild = bot.guilds[0]
+
+            # 既存ロール削除
+            for member in guild.members:
+                for role in member.roles:
+                    if role.name in weekly_roles.values():
+                        await member.remove_roles(role)
+
+            # TOP3付与
+            for i, (user_id, info) in enumerate(sorted_users[:3], start=1):
+
+                member = guild.get_member(int(user_id))
+                if not member:
+                    continue
+
+                role_name = weekly_roles.get(i)
+                role = discord.utils.get(guild.roles, name=role_name)
+
+                if role:
+                    await member.add_roles(role)
+
+                data[user_id]["weekly_xp"] = 0
+
+            save_data(data)
+
+            await asyncio.sleep(3600)  # 重複防止
+
+        await asyncio.sleep(60)
+# =========================
 # 起動時
 # =========================
 @bot.event
 async def on_ready():
+
+while not bot.is_closed():
+
     print("=== DATA CHECK ===")
     print(load_data())
     print("==================")
