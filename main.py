@@ -277,9 +277,9 @@ async def rank(interaction: discord.Interaction):
 
 
 # =========================
-# /top
+# /top コマンド
 # =========================
-@bot.tree.command(name="top", description="週間XPランキング")
+@bot.tree.command(name="top", description="サーバーランキングを見る")
 async def top(interaction: discord.Interaction):
 
     await interaction.response.defer()
@@ -287,31 +287,27 @@ async def top(interaction: discord.Interaction):
     data = load_data()
 
     if not data:
-        await interaction.followup.send("データがありません！")
+        await interaction.followup.send("まだデータがありません！")
         return
 
-    # weekly_xp順でソート
     sorted_users = sorted(
         data.items(),
-        key=lambda x: x[1].get("weekly_xp", 0),
+        key=lambda x: (x[1]["level"], x[1]["xp"]),
         reverse=True
-    )[:10]
+    )
 
     embed = discord.Embed(
-        title="🏆 週間XPランキング",
+        title="🏆 全サーバーランキング TOP10",
         color=discord.Color.gold()
     )
 
-    rank = 1
-    for user_id, user_data in sorted_users:
-        member = interaction.guild.get_member(int(user_id))
-        if member:
-            embed.add_field(
-                name=f"{rank}位",
-                value=f"{member.mention} - {user_data.get('weekly_xp', 0)} XP",
-                inline=False
-            )
-            rank += 1
+    description = ""
+
+    for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
+        user = await bot.fetch_user(int(user_id))
+        description += f"**{i}位** {user.name} - Lv{info['level']} ({info['xp']}XP)\n"
+
+    embed.description = description
 
     await interaction.followup.send(embed=embed)
 
