@@ -141,11 +141,11 @@ async def on_message(message):
     data = load_data()
 
     if user_id not in data:
-    data[user_id] = {
-        "xp": 0,
-        "level": 1,
-        "last_daily": "",
-        "weekly_xp": 0
+        data[user_id] = {
+            "xp": 0,
+            "level": 1,
+            "last_daily": "",
+            "weekly_xp": 0
     }
 
     # =========================
@@ -154,9 +154,9 @@ async def on_message(message):
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
     if data[user_id].get("last_daily") != today:
-        daily_bonus = 100
-        data[user_id]["xp"] += daily_bonus
-        data[user_id]["last_daily"] = today
+    daily_bonus = 100
+    data[user_id]["xp"] += daily_bonus
+    data[user_id]["last_daily"] = today
 
         await message.channel.send(
             f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
@@ -212,11 +212,11 @@ async def on_voice_state_update(member, before, after):
             data = load_data()
 
             if user_id not in data:
-    data[user_id] = {
-        "xp": 0,
-        "level": 1,
-        "last_daily": "",
-        "weekly_xp": 0
+        data[user_id] = {
+            "xp": 0,
+            "level": 1,
+            "last_daily": "",
+            "weekly_xp": 0
     }
 
             vc_xp = 10
@@ -374,7 +374,8 @@ async def weekly_reset():
 @bot.event
 async def on_ready():
 
-while not bot.is_closed():
+
+bot.loop.create_task(weekly_reset())
 
     print("=== DATA CHECK ===")
     print(load_data())
