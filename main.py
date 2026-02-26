@@ -93,7 +93,11 @@ async def on_message(message):
     data = load_data()
 
     if user_id not in data:
-        data[user_id] = {"xp": 0, "level": 1}
+    data[user_id] = {
+        "xp": 0,
+        "level": 1,
+        "last_daily": 0
+    }
 
     # XP追加（5〜20ランダム）
     xp_gain = random.randint(5, 20)
