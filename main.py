@@ -304,8 +304,12 @@ async def top(interaction: discord.Interaction):
     description = ""
 
     for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-    # メンション形式に変更
-    description += f"**{i}位** <@{user_id}> - Lv{info['level']} ({info['xp']}XP)\n"
+    try:
+        # user_idをintに変換してメンションに
+        description += f"**{i}位** <@{int(user_id)}> - Lv{info.get('level',0)} ({info.get('xp',0)}XP)\n"
+    except Exception as e:
+        print(f"ランキング表示エラー: {user_id} / {e}")
+        continue
 
     embed.description = description
 
