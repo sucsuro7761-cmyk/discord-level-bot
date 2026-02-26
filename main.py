@@ -275,6 +275,46 @@ async def rank(interaction: discord.Interaction):
     embed.set_footer(text="Level System")
     await interaction.followup.send(embed=embed)
 
+
+# =========================
+# /top
+# =========================
+@bot.tree.command(name="top", description="週間XPランキング")
+async def top(interaction: discord.Interaction):
+
+    await interaction.response.defer()
+
+    data = load_data()
+
+    if not data:
+        await interaction.followup.send("データがありません！")
+        return
+
+    # weekly_xp順でソート
+    sorted_users = sorted(
+        data.items(),
+        key=lambda x: x[1].get("weekly_xp", 0),
+        reverse=True
+    )[:10]
+
+    embed = discord.Embed(
+        title="🏆 週間XPランキング",
+        color=discord.Color.gold()
+    )
+
+    rank = 1
+    for user_id, user_data in sorted_users:
+        member = interaction.guild.get_member(int(user_id))
+        if member:
+            embed.add_field(
+                name=f"{rank}位",
+                value=f"{member.mention} - {user_data.get('weekly_xp', 0)} XP",
+                inline=False
+            )
+            rank += 1
+
+    await interaction.followup.send(embed=embed)
+
 # =========================
 # 起動時
 # =========================
