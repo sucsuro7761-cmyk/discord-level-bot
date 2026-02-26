@@ -181,20 +181,20 @@ async def on_voice_state_update(member, before, after):
 
     user_id = str(member.id)
 
+    # =========================
     # VCに参加した時
+    # =========================
     if after.channel and not before.channel:
 
         vc_users[user_id] = True
 
         while vc_users.get(user_id):
 
-            await asyncio.sleep(300)  # 5分（300秒）
+            await asyncio.sleep(300)
 
-            # まだVCにいるか確認
             if not member.voice or not member.voice.channel:
                 break
 
-            # 1人VC防止（同じチャンネルに2人以上）
             if len(member.voice.channel.members) < 2:
                 continue
 
@@ -208,18 +208,20 @@ async def on_voice_state_update(member, before, after):
                 }
 
             vc_xp = 10
-data[user_id]["xp"] += vc_xp
+            data[user_id]["xp"] += vc_xp
 
-await check_level_up(
-    member,
-    member.voice.channel,
-    data,
-    user_id
-)
+            await check_level_up(
+                member,
+                member.voice.channel,
+                data,
+                user_id
+            )
 
-save_data(data)
+            save_data(data)
 
+    # =========================
     # VC退出時
+    # =========================
     if before.channel and not after.channel:
         vc_users[user_id] = False
 
