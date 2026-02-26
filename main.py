@@ -156,11 +156,12 @@ async def on_message(message):
     if data[user_id].get("last_daily") != today:
     daily_bonus = 100
     data[user_id]["xp"] += daily_bonus
+    data[user_id]["weekly_xp"] += daily_bonus
     data[user_id]["last_daily"] = today
 
-        await message.channel.send(
-            f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
-        )
+    await message.channel.send(
+        f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
+    )
 
     # =========================
     # 通常XP
