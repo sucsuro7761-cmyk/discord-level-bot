@@ -192,9 +192,11 @@ async def on_voice_state_update(member, before, after):
 
             await asyncio.sleep(300)
 
+            # VCから抜けていたら停止
             if not member.voice or not member.voice.channel:
                 break
 
+            # 1人VC防止
             if len(member.voice.channel.members) < 2:
                 continue
 
@@ -220,7 +222,7 @@ async def on_voice_state_update(member, before, after):
             save_data(data)
 
     # =========================
-    # VC退出時
+    # VC退出時（← ここはwhileの外！！）
     # =========================
     if before.channel and not after.channel:
         vc_users[user_id] = False
