@@ -1,16 +1,13 @@
+
 import discord
 from discord.ext import commands
 import json
 import os
 import time
 import random
-import os
-import json
 from flask import Flask
 from threading import Thread
 from datetime import datetime
-
-DATA_PATH = "/data/levels.json"
 
 # =========================
 # Flask（Bot常時起動用）
@@ -73,81 +70,29 @@ permanent_roles = {
     3: "PHOTO+"
 }
 
+# =========================
+# レベルアップ処理
+# =========================
 async def check_level_up(message, data, user_id):
-    current_xp = data[user_id]["xp"]
-    current_level = data[user_id]["level"]
-    required_xp = current_level * 100
 
-    while current_xp >= required_xp:
-        data[user_id]["xp"] -= required_xp
-        data[user_id]["level"] += 1
-        current_level = data[user_id]["level"]
+    guild = message.guild
+
+    while True:
         current_xp = data[user_id]["xp"]
+        current_level = data[user_id]["level"]
         required_xp = current_level * 100
 
-        await message.channel.send(
-            f"🎉 {message.author.mention} が Lv{current_level} になりました！"
-        )
+        if current_xp < required_xp:
+            break
 
-# =========================
-# メッセージXP処理
-# =========================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    user_id = str(message.author.id)
-    current_time = time.time()
-
-    # 60秒クールタイム
-    if user_id in cooldowns:
-        if current_time - cooldowns[user_id] < 10:
-            return
-
-    cooldowns[user_id] = current_time
-
-    data = load_data()
-
-    if user_id not in data:
-    data[user_id] = {
-        "xp": 0,
-        "level": 1,
-        "last_daily": ""
-    }
-
-# 今日の日付取得
-today = datetime.utcnow().strftime("%Y-%m-%d")
-
-# デイリーボーナスチェック
-if data[user_id].get("last_daily") != today:
-    daily_bonus = 100
-    data[user_id]["xp"] += daily_bonus
-    data[user_id]["last_daily"] = today
-
-    await message.channel.send(
-        f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
-    )
-
-    # XP追加（5〜20ランダム）
-    xp_gain = random.randint(5, 20)
-    data[user_id]["xp"] += xp_gain
-
-    current_xp = data[user_id]["xp"]
-    current_level = data[user_id]["level"]
-    required_xp = current_level * 100
-
-    # レベルアップ判定
-    if current_xp >= required_xp:
-        data[user_id]["xp"] -= required_xp  # 余りXPを保持
+        # レベルアップ
+        data[user_id]["xp"] -= required_xp
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
         await message.channel.send(
             f"🎉 {message.author.mention} が Lv{new_level} になりました！"
         )
-
-        guild = message.guild
 
         # 永久ロール付与
         if new_level in permanent_roles:
@@ -172,8 +117,58 @@ if data[user_id].get("last_daily") != today:
                     f"🏆 {target_role_name} ランクに昇格しました！"
                 )
 
-    save_data(data)
+# =========================
+# メッセージXP処理
+# =========================
+@bot.event
+async def on_message(message):
 
+    if message.author.bot:
+        return
+
+    user_id = str(message.author.id)
+    current_time = time.time()
+
+    # 10秒クールタイム
+    if user_id in cooldowns:
+        if current_time - cooldowns[user_id] < 10:
+            return
+
+    cooldowns[user_id] = current_time
+
+    data = load_data()
+
+    if user_id not in data:
+        data[user_id] = {
+            "xp": 0,
+            "level": 1,
+            "last_daily": ""
+        }
+
+    # =========================
+    # デイリーボーナス（自動）
+    # =========================
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if data[user_id].get("last_daily") != today:
+        daily_bonus = 100
+        data[user_id]["xp"] += daily_bonus
+        data[user_id]["last_daily"] = today
+
+        await message.channel.send(
+            f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
+        )
+
+    # =========================
+    # 通常XP
+    # =========================
+    xp_gain = random.randint(5, 20)
+    data[user_id]["xp"] += xp_gain
+
+    # レベルチェック
+    await check_level_up(message, data, user_id)
+
+    save_data(data)
     await bot.process_commands(message)
 
 # =========================
@@ -195,7 +190,6 @@ async def rank(interaction: discord.Interaction):
     level = data[user_id]["level"]
     required_xp = level * 100
 
-    # XPバー
     bar_length = 20
     progress = xp / required_xp
     filled_length = int(bar_length * progress)
