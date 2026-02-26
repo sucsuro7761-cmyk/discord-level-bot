@@ -4,8 +4,12 @@ import json
 import os
 import time
 import random
+import os
+import json
 from flask import Flask
 from threading import Thread
+
+DATA_PATH = "/data/levels.json"
 
 # =========================
 # Flask（Bot常時起動用）
@@ -32,7 +36,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "levels.json"
+DATA_FILE = "/data/levels.json"
 cooldowns = {}
 
 # =========================
