@@ -4,6 +4,7 @@ import json
 import os
 import time
 import random
+import asyncio
 from flask import Flask
 from threading import Thread
 from datetime import datetime
@@ -70,12 +71,9 @@ permanent_roles = {
     3: "PHOTO+"
 }
 
-# =========================
-# レベルアップ処理
-# =========================
-async def check_level_up(message, data, user_id):
+async def check_level_up(member, channel, data, user_id):
 
-    guild = message.guild
+    guild = member.guild
 
     while True:
         current_xp = data[user_id]["xp"]
@@ -85,35 +83,33 @@ async def check_level_up(message, data, user_id):
         if current_xp < required_xp:
             break
 
-        # レベルアップ
         data[user_id]["xp"] -= required_xp
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
-        await message.channel.send(
-            f"🎉 {message.author.mention} が Lv{new_level} になりました！"
+        await channel.send(
+            f"🎉 {member.mention} が Lv{new_level} になりました！"
         )
 
-        # 永久ロール付与
+        # 永久ロール
         if new_level in permanent_roles:
             role_name = permanent_roles[new_level]
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
-                await message.author.add_roles(role)
-                await message.channel.send(f"📸 {role_name} を獲得しました！")
+                await member.add_roles(role)
+                await channel.send(f"📸 {role_name} を獲得しました！")
 
-        # ランクロール管理
+        # ランクロール
         target_role_name = rank_roles.get(new_level)
         if target_role_name:
             target_role = discord.utils.get(guild.roles, name=target_role_name)
             if target_role:
-                # 既存ランクロール削除
-                for role in message.author.roles:
+                for role in member.roles:
                     if role.name in rank_roles.values():
-                        await message.author.remove_roles(role)
+                        await member.remove_roles(role)
 
-                await message.author.add_roles(target_role)
-                await message.channel.send(
+                await member.add_roles(target_role)
+                await channel.send(
                     f"🏆 {target_role_name} ランクに昇格しました！"
                 )
 
@@ -166,7 +162,12 @@ async def on_message(message):
     data[user_id]["xp"] += xp_gain
 
     # レベルチェック
-    await check_level_up(message, data, user_id)
+    await check_level_up(
+    message.author,
+    message.channel,
+    data,
+    user_id
+)
 
     save_data(data)
     await bot.process_commands(message)
