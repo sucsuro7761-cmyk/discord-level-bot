@@ -309,6 +309,10 @@ async def top(interaction: discord.Interaction):
 # =========================
 @bot.event
 async def on_ready():
+    print("=== DATA CHECK ===")
+    print(load_data())
+    print("==================")
+
     synced = await bot.tree.sync()
     print(f"{len(synced)}個のコマンドを同期しました")
     print(f"Logged in as {bot.user}")
