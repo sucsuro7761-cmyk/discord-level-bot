@@ -34,7 +34,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "/data/levels.json"
+DATA_FILE = "levels.json"
 cooldowns = {}
 vc_users = {}
 
@@ -77,6 +77,9 @@ weekly_roles = {
     3: "🥉週間三位"
 }
 
+# =========================
+# レベルアップ処理
+# =========================
 async def check_level_up(member, channel, data, user_id):
 
     guild = member.guild
@@ -93,9 +96,10 @@ async def check_level_up(member, channel, data, user_id):
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
-        await channel.send(
-            f"🎉 {member.mention} が Lv{new_level} になりました！"
-        )
+        if channel:
+            await channel.send(
+                f"🎉 {member.mention} が Lv{new_level} になりました！"
+            )
 
         # 永久ロール
         if new_level in permanent_roles:
@@ -103,7 +107,8 @@ async def check_level_up(member, channel, data, user_id):
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 await member.add_roles(role)
-                await channel.send(f"📸 {role_name} を獲得しました！")
+                if channel:
+                    await channel.send(f"📸 {role_name} を獲得しました！")
 
         # ランクロール
         target_role_name = rank_roles.get(new_level)
@@ -115,9 +120,10 @@ async def check_level_up(member, channel, data, user_id):
                         await member.remove_roles(role)
 
                 await member.add_roles(target_role)
-                await channel.send(
-                    f"🏆 {target_role_name} ランクに昇格しました！"
-                )
+                if channel:
+                    await channel.send(
+                        f"🏆 {target_role_name} ランクに昇格しました！"
+                    )
 
 # =========================
 # メッセージXP処理
@@ -137,7 +143,6 @@ async def on_message(message):
             return
 
     cooldowns[user_id] = current_time
-
     data = load_data()
 
     if user_id not in data:
@@ -146,54 +151,49 @@ async def on_message(message):
             "level": 1,
             "last_daily": "",
             "weekly_xp": 0
-    }
+        }
 
-    # =========================
-    # デイリーボーナス（自動）
-    # =========================
     today = datetime.utcnow().strftime("%Y-%m-%d")
+    daily_bonus = 0
 
-    if data[user_id].get("last_daily") != today:
-    daily_bonus = 100
-    data[user_id]["xp"] += daily_bonus
-    data[user_id]["weekly_xp"] += daily_bonus
-    data[user_id]["last_daily"] = today
+    # デイリーボーナス
+    if data[user_id]["last_daily"] != today:
+        daily_bonus = 100
+        data[user_id]["xp"] += daily_bonus
+        data[user_id]["weekly_xp"] += daily_bonus
+        data[user_id]["last_daily"] = today
 
-    await message.channel.send(
-        f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
-    )
+        await message.channel.send(
+            f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
+        )
 
-    # =========================
     # 通常XP
-    # =========================
     xp_gain = random.randint(5, 20)
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
-    data[user_id]["weekly_xp"] += daily_bonus
 
-    # レベルチェック
     await check_level_up(
-    message.author,
-    message.channel,
-    data,
-    user_id
-)
+        message.author,
+        message.channel,
+        data,
+        user_id
+    )
 
     save_data(data)
     await bot.process_commands(message)
 
+# =========================
+# VC XP処理
+# =========================
 @bot.event
 async def on_voice_state_update(member, before, after):
 
-    # Botは無視
     if member.bot:
         return
 
     user_id = str(member.id)
 
-    # =========================
-    # VCに参加した時
-    # =========================
+    # VC参加
     if after.channel and not before.channel:
 
         vc_users[user_id] = True
@@ -202,23 +202,21 @@ async def on_voice_state_update(member, before, after):
 
             await asyncio.sleep(300)
 
-            # VCから抜けていたら停止
             if not member.voice or not member.voice.channel:
                 break
 
-            # 1人VC防止
             if len(member.voice.channel.members) < 2:
                 continue
 
             data = load_data()
 
             if user_id not in data:
-        data[user_id] = {
-            "xp": 0,
-            "level": 1,
-            "last_daily": "",
-            "weekly_xp": 0
-    }
+                data[user_id] = {
+                    "xp": 0,
+                    "level": 1,
+                    "last_daily": "",
+                    "weekly_xp": 0
+                }
 
             vc_xp = 10
             data[user_id]["xp"] += vc_xp
@@ -226,21 +224,19 @@ async def on_voice_state_update(member, before, after):
 
             await check_level_up(
                 member,
-                member.voice.channel,
+                member.guild.system_channel,  # テキスト送信用
                 data,
                 user_id
             )
 
             save_data(data)
 
-    # =========================
-    # VC退出時（← ここはwhileの外！！）
-    # =========================
+    # VC退出
     if before.channel and not after.channel:
         vc_users[user_id] = False
 
 # =========================
-# /rank コマンド
+# /rank
 # =========================
 @bot.tree.command(name="rank", description="自分のレベルを確認")
 async def rank(interaction: discord.Interaction):
@@ -258,11 +254,10 @@ async def rank(interaction: discord.Interaction):
     level = data[user_id]["level"]
     required_xp = level * 100
 
-    bar_length = 20
     progress = xp / required_xp
-    filled_length = int(bar_length * progress)
+    filled = int(20 * progress)
 
-    bar = "█" * filled_length + "░" * (bar_length - filled_length)
+    bar = "█" * filled + "░" * (20 - filled)
     percent = int(progress * 100)
 
     embed = discord.Embed(
@@ -278,105 +273,13 @@ async def rank(interaction: discord.Interaction):
     )
 
     embed.set_footer(text="Level System")
-
     await interaction.followup.send(embed=embed)
 
-# =========================
-# /top コマンド
-# =========================
-@bot.tree.command(name="top", description="サーバーランキングを見る")
-async def top(interaction: discord.Interaction):
-
-    await interaction.response.defer()
-
-    data = load_data()
-
-    if not data:
-        await interaction.followup.send("まだデータがありません！")
-        return
-
-    sorted_users = sorted(
-        data.items(),
-        key=lambda x: (x[1]["level"], x[1]["xp"]),
-        reverse=True
-    )
-
-    embed = discord.Embed(
-        title="🏆 全サーバーランキング TOP10",
-        color=discord.Color.gold()
-    )
-
-    description = ""
-
-    for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-        user = await bot.fetch_user(int(user_id))
-        description += f"**{i}位** {user.name} - Lv{info['level']} ({info['xp']}XP)\n"
-
-    embed.description = description
-
-    await interaction.followup.send(embed=embed)
-
-# =========================
-# 週間三傑リセット処理
-# =========================
-async def weekly_reset():
-
-    await bot.wait_until_ready()
-
-    while not bot.is_closed():
-
-        now = datetime.now()  # 日本時間基準
-
-        # 月曜日 0時
-        if now.weekday() == 0 and now.hour == 0:
-
-            data = load_data()
-
-            sorted_users = sorted(
-                data.items(),
-                key=lambda x: x[1].get("weekly_xp", 0),
-                reverse=True
-            )
-
-            if not bot.guilds:
-                return
-
-            guild = bot.guilds[0]
-
-            # 既存ロール削除
-            for member in guild.members:
-                for role in member.roles:
-                    if role.name in weekly_roles.values():
-                        await member.remove_roles(role)
-
-            # TOP3付与
-            for i, (user_id, info) in enumerate(sorted_users[:3], start=1):
-
-                member = guild.get_member(int(user_id))
-                if not member:
-                    continue
-
-                role_name = weekly_roles.get(i)
-                role = discord.utils.get(guild.roles, name=role_name)
-
-                if role:
-                    await member.add_roles(role)
-
-                data[user_id]["weekly_xp"] = 0
-
-            save_data(data)
-
-            await asyncio.sleep(3600)  # 重複防止
-
-        await asyncio.sleep(60)
 # =========================
 # 起動時
 # =========================
 @bot.event
 async def on_ready():
-
-
-bot.loop.create_task(weekly_reset())
 
     print("=== DATA CHECK ===")
     print(load_data())
@@ -396,4 +299,4 @@ if __name__ == "__main__":
     if token:
         bot.run(token)
     else:
-        print("Error: TOKEN not found in environment variables.")
+        print("Error: TOKEN not found.")
