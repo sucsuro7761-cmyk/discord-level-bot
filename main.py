@@ -36,6 +36,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "/data/levels.json"
 cooldowns = {}
+vc_users = {}
 
 # =========================
 # データ読み書き
@@ -170,6 +171,56 @@ async def on_message(message):
 
     save_data(data)
     await bot.process_commands(message)
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+
+    # Botは無視
+    if member.bot:
+        return
+
+    user_id = str(member.id)
+
+    # VCに参加した時
+    if after.channel and not before.channel:
+
+        vc_users[user_id] = True
+
+        while vc_users.get(user_id):
+
+            await asyncio.sleep(300)  # 5分（300秒）
+
+            # まだVCにいるか確認
+            if not member.voice or not member.voice.channel:
+                break
+
+            # 1人VC防止（同じチャンネルに2人以上）
+            if len(member.voice.channel.members) < 2:
+                continue
+
+            data = load_data()
+
+            if user_id not in data:
+                data[user_id] = {
+                    "xp": 0,
+                    "level": 1,
+                    "last_daily": ""
+                }
+
+            vc_xp = 10
+            data[user_id]["xp"] += vc_xp
+
+            save_data(data)
+
+            await check_level_up(
+                await member.guild.fetch_channel(member.voice.channel.id),
+                data,
+                user_id
+            )
+
+    # VC退出時
+    if before.channel and not after.channel:
+        vc_users[user_id] = False
 
 # =========================
 # /rank コマンド
