@@ -73,6 +73,22 @@ permanent_roles = {
     3: "PHOTO+"
 }
 
+async def check_level_up(message, data, user_id):
+    current_xp = data[user_id]["xp"]
+    current_level = data[user_id]["level"]
+    required_xp = current_level * 100
+
+    while current_xp >= required_xp:
+        data[user_id]["xp"] -= required_xp
+        data[user_id]["level"] += 1
+        current_level = data[user_id]["level"]
+        current_xp = data[user_id]["xp"]
+        required_xp = current_level * 100
+
+        await message.channel.send(
+            f"🎉 {message.author.mention} が Lv{current_level} になりました！"
+        )
+
 # =========================
 # メッセージXP処理
 # =========================
