@@ -8,6 +8,7 @@ import os
 import json
 from flask import Flask
 from threading import Thread
+from datetime import datetime
 
 DATA_PATH = "/data/levels.json"
 
@@ -96,8 +97,21 @@ async def on_message(message):
     data[user_id] = {
         "xp": 0,
         "level": 1,
-        "last_daily": 0
+        "last_daily": ""
     }
+
+# 今日の日付取得
+today = datetime.utcnow().strftime("%Y-%m-%d")
+
+# デイリーボーナスチェック
+if data[user_id].get("last_daily") != today:
+    daily_bonus = 100
+    data[user_id]["xp"] += daily_bonus
+    data[user_id]["last_daily"] = today
+
+    await message.channel.send(
+        f"🎁 {message.author.mention} デイリーボーナス！ +{daily_bonus}XP"
+    )
 
     # XP追加（5〜20ランダム）
     xp_gain = random.randint(5, 20)
