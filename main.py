@@ -304,8 +304,8 @@ async def top(interaction: discord.Interaction):
     description = ""
 
     for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-        user = await bot.fetch_user(int(user_id))
-        description += f"**{i}位** {user.name} - Lv{info['level']} ({info['xp']}XP)\n"
+    # メンション形式に変更
+    description += f"**{i}位** <@{user_id}> - Lv{info['level']} ({info['xp']}XP)\n"
 
     embed.description = description
 
