@@ -145,13 +145,14 @@ async def on_message(message):
     cooldowns[user_id] = current_time
     data = load_data()
 
+    # 安全初期化
     if user_id not in data:
-        data[user_id] = {
-            "xp": 0,
-            "level": 1,
-            "last_daily": "",
-            "weekly_xp": 0
-        }
+        data[user_id] = {}
+
+    data[user_id].setdefault("xp", 0)
+    data[user_id].setdefault("level", 1)
+    data[user_id].setdefault("last_daily", "")
+    data[user_id].setdefault("weekly_xp", 0)
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     daily_bonus = 0
@@ -183,7 +184,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # =========================
-# VC XP処理
+# VC XP処理（安全版）
 # =========================
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -211,20 +212,24 @@ async def on_voice_state_update(member, before, after):
             data = load_data()
 
             if user_id not in data:
-                data[user_id] = {
-                    "xp": 0,
-                    "level": 1,
-                    "last_daily": "",
-                    "weekly_xp": 0
-                }
+                data[user_id] = {}
+
+            # 安全初期化
+            data[user_id].setdefault("xp", 0)
+            data[user_id].setdefault("level", 1)
+            data[user_id].setdefault("last_daily", "")
+            data[user_id].setdefault("weekly_xp", 0)
 
             vc_xp = 10
             data[user_id]["xp"] += vc_xp
             data[user_id]["weekly_xp"] += vc_xp
 
+            # system_channel が存在しない場合は None
+            text_channel = member.guild.system_channel if member.guild.system_channel else None
+
             await check_level_up(
                 member,
-                member.guild.system_channel,  # テキスト送信用
+                text_channel,
                 data,
                 user_id
             )
@@ -250,8 +255,8 @@ async def rank(interaction: discord.Interaction):
         await interaction.followup.send("まだXPがありません！")
         return
 
-    xp = data[user_id]["xp"]
-    level = data[user_id]["level"]
+    xp = data[user_id].get("xp", 0)
+    level = data[user_id].get("level", 1)
     required_xp = level * 100
 
     progress = xp / required_xp
@@ -275,7 +280,6 @@ async def rank(interaction: discord.Interaction):
     embed.set_footer(text="Level System")
     await interaction.followup.send(embed=embed)
 
-
 # =========================
 # /top コマンド
 # =========================
@@ -292,7 +296,7 @@ async def top(interaction: discord.Interaction):
 
     sorted_users = sorted(
         data.items(),
-        key=lambda x: (x[1]["level"], x[1]["xp"]),
+        key=lambda x: (x[1].get("level",0), x[1].get("xp",0)),
         reverse=True
     )
 
@@ -303,14 +307,9 @@ async def top(interaction: discord.Interaction):
 
     description = ""
     for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-        try:
-            # infoの中身が空だったり、level/xpが無い場合を防ぐ
-            level = info.get("level", 0)
-            xp = info.get("xp", 0)
-            description += f"**{i}位** <@{user_id}> - Lv{level} ({xp}XP)\n"
-        except Exception as e:
-            print(f"ランキング表示エラー: {user_id} / {e}")
-            continue
+        level = info.get("level", 0)
+        xp = info.get("xp", 0)
+        description += f"**{i}位** <@{user_id}> - Lv{level} ({xp}XP)\n"
 
     embed.description = description
 
