@@ -42,7 +42,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "levels.json"
+DATA_FILE = "/data/levels.json"
 cooldowns = {}
 vc_users = {}
 
