@@ -316,6 +316,38 @@ async def top(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /myxp コマンド
+# 自分のXPやレベルを確認する
+# =========================
+@bot.tree.command(name="myxp", description="自分のXPやレベルを確認")
+async def myxp(interaction: discord.Interaction):
+    data = load_data()
+    user_id = str(interaction.user.id)
+
+    if user_id not in data:
+        await interaction.response.send_message("まだデータがありません！")
+        return
+
+    # 安全に取得
+    info = data[user_id]
+    xp = info.get("xp", 0)
+    level = info.get("level", 1)
+    weekly_xp = info.get("weekly_xp", 0)
+    last_daily = info.get("last_daily", "なし")
+
+    # メッセージ送信
+    embed = discord.Embed(
+        title=f"📊 {interaction.user.name} のデータ",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="レベル", value=f"Lv {level}", inline=True)
+    embed.add_field(name="XP", value=f"{xp} XP", inline=True)
+    embed.add_field(name="今週のXP", value=f"{weekly_xp} XP", inline=True)
+    embed.add_field(name="最終デイリーボーナス", value=last_daily, inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+# =========================
 # 起動時
 # =========================
 @bot.event
