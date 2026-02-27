@@ -7,8 +7,7 @@ import random
 import asyncio
 from flask import Flask
 from threading import Thread
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 
 # =========================
 # Flask（Bot常時起動用）
