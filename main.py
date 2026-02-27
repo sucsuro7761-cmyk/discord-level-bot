@@ -9,6 +9,14 @@ from flask import Flask
 from threading import Thread
 from datetime import datetime, timezone
 
+intents = discord.Intents.default()
+intents.message_content = True
+intents.voice_states = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+vc_users = {}
+
 # =========================
 # Flask（Bot常時起動用）
 # =========================
@@ -201,7 +209,7 @@ async def on_voice_state_update(member, before, after):
 
         while vc_users.get(user_id):
 
-            await asyncio.sleep(300)
+            await asyncio.sleep(10)
 
             if not member.voice or not member.voice.channel:
                 break
