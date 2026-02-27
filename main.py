@@ -209,7 +209,7 @@ async def on_voice_state_update(member, before, after):
 
         while vc_users.get(user_id):
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
             if not member.voice or not member.voice.channel:
                 break
