@@ -8,6 +8,7 @@ import asyncio
 from flask import Flask
 from threading import Thread
 from datetime import datetime
+from datetime import timezone
 
 # =========================
 # Flask（Bot常時起動用）
@@ -154,7 +155,7 @@ async def on_message(message):
     data[user_id].setdefault("last_daily", "")
     data[user_id].setdefault("weekly_xp", 0)
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_bonus = 0
 
     # デイリーボーナス
