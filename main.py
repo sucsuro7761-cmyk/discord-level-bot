@@ -20,7 +20,7 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "/data/levels.json"
-LEVEL_CHANNEL_ID = 123456789012345678  # ←ここに通知用チャンネルID
+LEVEL_CHANNEL_ID = 1477839103151177864 
 
 cooldowns = {}
 vc_users = {}
