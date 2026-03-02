@@ -43,6 +43,7 @@ def keep_alive():
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "/data/levels.json"
+LEVEL_CHANNEL_ID = 1477839103151177864
 cooldowns = {}
 vc_users = {}
 
@@ -91,6 +92,7 @@ weekly_roles = {
 async def check_level_up(member, channel, data, user_id):
 
     guild = member.guild
+    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
     while True:
         current_xp = data[user_id]["xp"]
@@ -104,8 +106,8 @@ async def check_level_up(member, channel, data, user_id):
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
-        if channel:
-            await channel.send(
+        if notify_channel:
+            await notify_channel.send(
                 f"🎉 {member.mention} が Lv{new_level} になりました！"
             )
 
@@ -115,8 +117,8 @@ async def check_level_up(member, channel, data, user_id):
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 await member.add_roles(role)
-                if channel:
-                    await channel.send(f"📸 {role_name} を獲得しました！")
+                if notify_channel:
+                    await notify_channel.send(f"📸 {role_name} を獲得しました！")
 
         # ランクロール
         target_role_name = rank_roles.get(new_level)
@@ -128,8 +130,9 @@ async def check_level_up(member, channel, data, user_id):
                         await member.remove_roles(role)
 
                 await member.add_roles(target_role)
-                if channel:
-                    await channel.send(
+
+                if notify_channel:
+                    await notify_channel.send(
                         f"🏆 {target_role_name} ランクに昇格しました！"
                     )
 
