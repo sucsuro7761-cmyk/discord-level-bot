@@ -67,10 +67,10 @@ def save_data(data):
 # =========================
 rank_roles = {
     1: "MEMBER Lite",
-    10: "MEMBER",
-    30: "CORE",
-    50: "SELECT",
-    75: "PREMIUM",
+    5: "MEMBER",
+    15: "CORE",
+    35: "SELECT",
+    70: "PREMIUM",
     100: "VIP Lite",
     200: "VIP"
 }
