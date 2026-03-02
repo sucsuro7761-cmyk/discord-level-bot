@@ -365,8 +365,8 @@ async def weekly_ranking_task():
 
     now = datetime.now(JST)
 
-    # 月曜18:00のみ実行
-    if now.weekday() == 0 and now.hour == 18 and now.minute == 0:
+    # 月曜18:00〜18:01の間に実行（安全版）
+    if now.weekday() == 0 and now.hour == 18 and now.minute < 2:
 
         data = load_data()
 
@@ -374,6 +374,7 @@ async def weekly_ranking_task():
             return
 
         guild = bot.guilds[0]
+        notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
         # ランキング作成（weekly_xp順）
         sorted_users = sorted(
@@ -391,16 +392,32 @@ async def weekly_ranking_task():
                 for member in role.members:
                     await member.remove_roles(role)
 
+        results_text = ""
+
         # Top3に付与
         for rank, (user_id, info) in enumerate(top3, start=1):
 
             role_name = weekly_roles.get(rank)
             role = discord.utils.get(guild.roles, name=role_name)
+            member = guild.get_member(int(user_id))
 
-            if role:
-                member = guild.get_member(int(user_id))
-                if member:
-                    await member.add_roles(role)
+            if role and member:
+                await member.add_roles(role)
+
+            weekly_xp = info.get("weekly_xp", 0)
+            medal = ["🥇", "🥈", "🥉"][rank - 1]
+            results_text += f"{medal} <@{user_id}> - {weekly_xp} XP\n"
+
+        # 結果発表
+        if notify_channel and results_text:
+            embed = discord.Embed(
+                title="🏆 週間ランキング結果発表！",
+                description=results_text,
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text="次回は来週月曜18:00に更新！")
+
+            await notify_channel.send(embed=embed)
 
         # weekly_xpリセット
         for user_id in data:
@@ -408,9 +425,6 @@ async def weekly_ranking_task():
 
         save_data(data)
 
-# =========================
-# 起動時
-# =========================
 # =========================
 # 起動時
 # =========================
