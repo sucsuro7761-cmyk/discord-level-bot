@@ -412,6 +412,9 @@ async def weekly_ranking_task():
 # =========================
 # 起動時
 # =========================
+# =========================
+# 起動時
+# =========================
 @bot.event
 async def on_ready():
 
@@ -422,6 +425,9 @@ async def on_ready():
     synced = await bot.tree.sync()
     print(f"{len(synced)}個のコマンドを同期しました")
     print(f"Logged in as {bot.user}")
+
+    if not weekly_ranking_task.is_running():
+        weekly_ranking_task.start()
 
 # =========================
 # 実行
