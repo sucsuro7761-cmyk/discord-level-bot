@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import json
 import os
 import time
@@ -8,7 +9,6 @@ import asyncio
 from flask import Flask
 from threading import Thread
 from datetime import datetime, timezone, timedelta
-from discord import app_commands
 import pytz
 
 # =========================
@@ -28,11 +28,10 @@ GUILD_ID = 1332006524465188904
 cooldowns = {}
 vc_users = {}
 
-# JST タイムゾーン
 JST = pytz.timezone('Asia/Tokyo')
 
 # =========================
-# Flask（常時起動用）
+# Flask
 # =========================
 app = Flask('')
 
@@ -47,7 +46,7 @@ def keep_alive():
     Thread(target=run).start()
 
 # =========================
-# データ読み書き
+# データ
 # =========================
 def load_data():
     if not os.path.exists(DATA_FILE):
@@ -55,7 +54,7 @@ def load_data():
     with open(DATA_FILE, "r") as f:
         try:
             return json.load(f)
-        except json.JSONDecodeError:
+        except:
             return {}
 
 def save_data(data):
@@ -63,85 +62,48 @@ def save_data(data):
         json.dump(data, f, indent=4)
 
 # =========================
-# ロール設定
-# =========================
-rank_roles = {
-    1: "MEMBER Lite",
-    5: "MEMBER",
-    15: "CORE",
-    35: "SELECT",
-    70: "PREMIUM",
-    100: "VIP Lite",
-    200: "VIP"
-}
-
-permanent_roles = {
-    3: "PHOTO+"
-}
-
-# 週間王者ロール
-weekly_champion_roles = {
-    1: "週間王者🥇",
-    2: "週間準王🥈",
-    3: "週間三位🥉"
-}
-
-# =========================
-# 週間XP管理用ユーティリティ
+# 週間計算
 # =========================
 def get_week_start_timestamp():
-    """現在の週の開始時刻（月曜18:00 JST）を取得"""
     now = datetime.now(JST)
-    
-    # 月曜日の18:00までの経過時間を計算
-    days_since_monday = now.weekday()  # 0=月, 6=日
-    current_time_seconds = now.hour * 3600 + now.minute * 60 + now.second
-    monday_18_seconds = 18 * 3600
-    
-    if days_since_monday == 0 and current_time_seconds < monday_18_seconds:
-        # 月曜日で18:00前なら前週の月曜18:00から
-        week_start = now - timedelta(days=7)
-    else:
-        # それ以外は今週の月曜18:00から
-        week_start = now - timedelta(days=days_since_monday)
-    
+    days_since_monday = now.weekday()
+    week_start = now - timedelta(days=days_since_monday)
     week_start = week_start.replace(hour=18, minute=0, second=0, microsecond=0)
     return int(week_start.timestamp())
 
 def get_weekly_xp_sum(data, user_id):
-    """指定ユーザーの今週のXP合計を取得"""
     week_start = get_week_start_timestamp()
-    total_xp = 0
-    
+    total = 0
     if user_id in data and "xp_history" in data[user_id]:
-        for timestamp, xp_gain in data[user_id]["xp_history"]:
+        for timestamp, xp in data[user_id]["xp_history"]:
             if timestamp >= week_start:
-                total_xp += xp_gain
-    
-    return total_xp
+                total += xp
+    return total
 
-def get_top_3_users():
-    """週間XP TOP3を取得"""
-    data = load_data()
-    user_xp_list = []
-    
-    for user_id, user_data in data.items():
+def get_weekly_top(data):
+    ranking = []
+    for user_id in data:
         weekly_xp = get_weekly_xp_sum(data, user_id)
-        if weekly_xp > 0:
-            user_xp_list.append((user_id, weekly_xp))
-    
-    # XPでソート（降順）
-    user_xp_list.sort(key=lambda x: x[1], reverse=True)
-    
-    return user_xp_list[:3]
+        ranking.append((user_id, weekly_xp))
+
+    ranking.sort(key=lambda x: x[1], reverse=True)
+    return ranking
+
+def get_total_top_3():
+    data = load_data()
+    ranking = []
+
+    for user_id, user_data in data.items():
+        total_xp = user_data.get("xp", 0)
+        ranking.append((user_id, total_xp))
+
+    ranking.sort(key=lambda x: x[1], reverse=True)
+    return ranking[:3]
 
 # =========================
-# レベルアップ処理
+# レベルアップ
 # =========================
 async def check_level_up(member, channel, data, user_id):
-
-    guild = member.guild
-
     while True:
         current_xp = data[user_id]["xp"]
         current_level = data[user_id]["level"]
@@ -152,102 +114,107 @@ async def check_level_up(member, channel, data, user_id):
 
         data[user_id]["xp"] -= required_xp
         data[user_id]["level"] += 1
-        new_level = data[user_id]["level"]
 
         if channel:
             await channel.send(
-                f"🎉 {member.mention} が Lv{new_level} になりました！"
+                f"🎉 {member.mention} が Lv{data[user_id]['level']} になりました！"
             )
 
-        # 永久ロール
-        if new_level in permanent_roles:
-            role_name = permanent_roles[new_level]
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                await member.add_roles(role)
-
-        # ランクロール
-        target_role_name = rank_roles.get(new_level)
-        if target_role_name:
-            target_role = discord.utils.get(guild.roles, name=target_role_name)
-            if target_role:
-                for role in member.roles:
-                    if role.name in rank_roles.values():
-                        await member.remove_roles(role)
-                await member.add_roles(target_role)
-
 # =========================
-# 週間ロール管理
+# 🔥 スラッシュコマンド
 # =========================
-async def assign_weekly_champion_roles(guild):
-    """TOP3ユーザーに週間王者ロールを付与"""
-    top_3 = get_top_3_users()
-    
-    # 既存の週間ロールを全員から剥奪
-    for rank, role_name in weekly_champion_roles.items():
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            for member in guild.members:
-                if role in member.roles:
-                    await member.remove_roles(role)
-                    print(f"Removed {role_name} from {member.name}")
-    
-    # TOP3に新しいロールを付与
-    for rank, (user_id, weekly_xp) in enumerate(top_3, 1):
-        member = guild.get_member(int(user_id))
+
+@bot.tree.command(name="myxp", description="現在のXPを確認")
+async def myxp(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    data = load_data()
+
+    if user_id not in data:
+        await interaction.response.send_message("まだデータがありません！")
+        return
+
+    total_xp = data[user_id]["xp"]
+    weekly_xp = get_weekly_xp_sum(data, user_id)
+
+    await interaction.response.send_message(
+        f"📊 {interaction.user.mention}\n"
+        f"総合XP: {total_xp}\n"
+        f"今週XP: {weekly_xp}"
+    )
+
+@bot.tree.command(name="rank", description="現在のレベルを確認")
+async def rank(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    data = load_data()
+
+    if user_id not in data:
+        await interaction.response.send_message("まだデータがありません！")
+        return
+
+    level = data[user_id]["level"]
+    xp = data[user_id]["xp"]
+    required = level * 100
+
+    await interaction.response.send_message(
+        f"🏆 {interaction.user.mention}\n"
+        f"レベル: {level}\n"
+        f"XP: {xp}/{required}"
+    )
+
+@bot.tree.command(name="top", description="総合XPランキングTOP3")
+async def top(interaction: discord.Interaction):
+    top_3 = get_total_top_3()
+
+    if not top_3:
+        await interaction.response.send_message("まだランキングデータがありません！")
+        return
+
+    message = "🏆 総合XPランキング TOP3\n\n"
+
+    for i, (user_id, xp) in enumerate(top_3, 1):
+        member = interaction.guild.get_member(int(user_id))
         if member:
-            role_name = weekly_champion_roles[rank]
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                await member.add_roles(role)
-                print(f"Added {role_name} to {member.name} (XP: {weekly_xp})")
-    
-    # 通知
-    level_channel = bot.get_channel(LEVEL_CHANNEL_ID)
-    if level_channel:
-        embed = discord.Embed(
-            title="📊 週間ランキング更新！",
-            description="先週の週間ランキングが確定しました",
-            color=discord.Color.gold()
-        )
-        
-        for rank, (user_id, weekly_xp) in enumerate(top_3, 1):
-            member = guild.get_member(int(user_id))
-            if member:
-                medal = ["🥇", "🥈", "🥉"][rank - 1]
-                embed.add_field(
-                    name=f"{medal} 第{rank}位",
-                    value=f"{member.mention}\nXP: {weekly_xp}",
-                    inline=False
-                )
-        
-        await level_channel.send(embed=embed)
+            medal = ["🥇", "🥈", "🥉"][i - 1]
+            message += f"{medal} {member.mention} - {xp}XP\n"
+
+    await interaction.response.send_message(message)
 
 # =========================
-# 週間ランキング定時実行
+# 🏆 週間王者タスク
 # =========================
-@tasks.loop(hours=24)
+@tasks.loop(minutes=1)
 async def weekly_champion_task():
-    """毎週月曜日18:00 JSTに実行"""
     now = datetime.now(JST)
-    
-    # 月曜日の18:00か確認
-    if now.weekday() == 0 and 18 <= now.hour < 19:  # 月曜日の18時台
-        guild = bot.get_guild(GUILD_ID)
-        if guild:
-            await assign_weekly_champion_roles(guild)
-            print(f"Weekly champion roles assigned at {now}")
 
-@weekly_champion_task.before_loop
-async def before_weekly_task():
-    await bot.wait_until_ready()
+    if now.weekday() == 0 and now.hour == 18 and now.minute == 0:
+        data = load_data()
+        ranking = get_weekly_top(data)
+
+        if not ranking:
+            return
+
+        winner_id, winner_xp = ranking[0]
+        guild = bot.get_guild(GUILD_ID)
+        channel = guild.get_channel(LEVEL_CHANNEL_ID)
+
+        member = guild.get_member(int(winner_id))
+        if member and channel:
+            await channel.send(
+                f"🏆 今週の王者は {member.mention}！\n"
+                f"獲得XP: {winner_xp}"
+            )
+
+        # 履歴リセット
+        for user_id in data:
+            data[user_id]["xp_history"] = []
+
+        save_data(data)
 
 # =========================
-# メッセージXP処理
+# メッセージXP
 # =========================
 @bot.event
 async def on_message(message):
-
     if message.author.bot:
         return
 
@@ -262,101 +229,29 @@ async def on_message(message):
     data = load_data()
 
     if user_id not in data:
-        data[user_id] = {}
-
-    data[user_id].setdefault("xp", 0)
-    data[user_id].setdefault("level", 1)
-    data[user_id].setdefault("last_daily", "")
-    data[user_id].setdefault("weekly_xp", 0)
-    data[user_id].setdefault("xp_history", [])
-
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    if data[user_id]["last_daily"] != today:
-        bonus = 100
-        data[user_id]["xp"] += bonus
-        data[user_id]["weekly_xp"] += bonus
-        data[user_id]["xp_history"].append([int(time.time()), bonus])
-        data[user_id]["last_daily"] = today
-        await message.channel.send(
-            f"🎁 {message.author.mention} デイリーボーナス！ +{bonus}XP"
-        )
+        data[user_id] = {
+            "xp": 0,
+            "level": 1,
+            "xp_history": []
+        }
 
     xp_gain = random.randint(5, 20)
     data[user_id]["xp"] += xp_gain
-    data[user_id]["weekly_xp"] += xp_gain
     data[user_id]["xp_history"].append([int(time.time()), xp_gain])
 
     await check_level_up(message.author, message.channel, data, user_id)
-
     save_data(data)
     await bot.process_commands(message)
 
 # =========================
-# VC XP処理
-# =========================
-@bot.event
-async def on_voice_state_update(member, before, after):
-
-    if member.bot:
-        return
-
-    user_id = str(member.id)
-
-    if after.channel and not before.channel:
-
-        vc_users[user_id] = True
-
-        while vc_users.get(user_id):
-
-            await asyncio.sleep(30)
-
-            if not member.voice or not member.voice.channel:
-                break
-
-            if len(member.voice.channel.members) < 2:
-                continue
-
-            data = load_data()
-
-            if user_id not in data:
-                data[user_id] = {}
-
-            data[user_id].setdefault("xp", 0)
-            data[user_id].setdefault("level", 1)
-            data[user_id].setdefault("last_daily", "")
-            data[user_id].setdefault("weekly_xp", 0)
-            data[user_id].setdefault("xp_history", [])
-
-            vc_xp = 10
-            data[user_id]["xp"] += vc_xp
-            data[user_id]["weekly_xp"] += vc_xp
-            data[user_id]["xp_history"].append([int(time.time()), vc_xp])
-
-            # 🔥 専用チャンネルへ送信
-            level_channel = bot.get_channel(LEVEL_CHANNEL_ID)
-
-            await check_level_up(
-                member,
-                level_channel,
-                data,
-                user_id
-            )
-
-            save_data(data)
-
-    if before.channel and not after.channel:
-        vc_users[user_id] = False
-
-# =========================
-# 起動時
+# 起動
 # =========================
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
+    synced = await bot.tree.sync()
+    print(f"✅ Synced {len(synced)} commands")
     print(f"Logged in as {bot.user}")
-    
-    # タスク開始
+
     if not weekly_champion_task.is_running():
         weekly_champion_task.start()
 
