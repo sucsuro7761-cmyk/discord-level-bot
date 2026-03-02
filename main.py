@@ -8,6 +8,9 @@ import asyncio
 from flask import Flask
 from threading import Thread
 from datetime import datetime, timezone
+from discord.ext import tasks
+import pytz
+from datetime import timedelta
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -355,6 +358,56 @@ async def myxp(interaction: discord.Interaction):
     embed.add_field(name="最終デイリーボーナス", value=last_daily, inline=False)
 
     await interaction.response.send_message(embed=embed)
+
+JST = pytz.timezone("Asia/Tokyo")
+
+@tasks.loop(minutes=1)
+async def weekly_ranking_task():
+
+    now = datetime.now(JST)
+
+    # 月曜18:00のみ実行
+    if now.weekday() == 0 and now.hour == 18 and now.minute == 0:
+
+        data = load_data()
+
+        if not data:
+            return
+
+        guild = bot.guilds[0]
+
+        # ランキング作成（weekly_xp順）
+        sorted_users = sorted(
+            data.items(),
+            key=lambda x: x[1].get("weekly_xp", 0),
+            reverse=True
+        )
+
+        top3 = sorted_users[:3]
+
+        # 既存の週間ロールを全員から剥がす
+        for role_name in weekly_roles.values():
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                for member in role.members:
+                    await member.remove_roles(role)
+
+        # Top3に付与
+        for rank, (user_id, info) in enumerate(top3, start=1):
+
+            role_name = weekly_roles.get(rank)
+            role = discord.utils.get(guild.roles, name=role_name)
+
+            if role:
+                member = guild.get_member(int(user_id))
+                if member:
+                    await member.add_roles(role)
+
+        # weekly_xpリセット
+        for user_id in data:
+            data[user_id]["weekly_xp"] = 0
+
+        save_data(data)
 
 # =========================
 # 起動時
