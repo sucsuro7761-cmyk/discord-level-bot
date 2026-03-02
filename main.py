@@ -8,6 +8,7 @@ import asyncio
 from flask import Flask
 from threading import Thread
 from datetime import datetime, timezone, timedelta
+from discord import app_commands
 import pytz
 
 # =========================
