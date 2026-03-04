@@ -106,34 +106,49 @@ async def check_level_up(member, channel, data, user_id):
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
+        # レベルアップ通知
         if notify_channel:
             await notify_channel.send(
                 f"🎉 {member.mention} が Lv{new_level} になりました！"
             )
 
+        # =========================
         # 永久ロール
+        # =========================
         if new_level in permanent_roles:
             role_name = permanent_roles[new_level]
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 await member.add_roles(role)
                 if notify_channel:
-                    await notify_channel.send(f"📸 {role_name} を獲得しました！")
-
-        
-    
-            target_role = discord.utils.get(guild.roles, name=target_role_name)
-            if target_role:
-                for role in member.roles:
-                    if role.name in rank_roles.values():
-                        await member.remove_roles(role)
-
-                await member.add_roles(target_role)
-
-                if notify_channel:
                     await notify_channel.send(
-                        f"🏆 {target_role_name} ランクに昇格しました！"
+                        f"📸 {role_name} を獲得しました！"
                     )
+
+        # =========================
+        # 🔥 ランクロール（範囲判定版）
+        # =========================
+        for min_lv, max_lv, role_name in rank_roles:
+            if min_lv <= new_level <= max_lv:
+
+                target_role = discord.utils.get(guild.roles, name=role_name)
+
+                if target_role:
+
+                    # 既存ランクロール削除
+                    for role in member.roles:
+                        for _, _, r_name in rank_roles:
+                            if role.name == r_name:
+                                await member.remove_roles(role)
+
+                    await member.add_roles(target_role)
+
+                    if notify_channel:
+                        await notify_channel.send(
+                            f"🏆 {role_name} ランクに昇格しました！"
+                        )
+
+                break
 
 # =========================
 # メッセージXP処理
