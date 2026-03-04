@@ -560,7 +560,7 @@ async def on_ready():
         decay_task.start()
     
     if not weekly_mid_announcement.is_running():
-    weekly_mid_announcement.start()
+        weekly_mid_announcement.start()
 
 # =========================
 # 実行
