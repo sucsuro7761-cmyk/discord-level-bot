@@ -555,7 +555,7 @@ async def decay_task():
 if member:
     await update_rank_role(member, new_level)
         
-        results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
+    results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
 
     data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
 
