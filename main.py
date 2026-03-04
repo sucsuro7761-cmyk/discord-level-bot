@@ -142,6 +142,8 @@ async def check_level_up(member, channel, data, user_id):
         data[user_id]["xp"] -= required_xp
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
+        
+        await update_rank_role(member, new_level)
 
         # レベルアップ通知
         if notify_channel:
