@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from discord.ext import tasks
 import pytz
 from datetime import timedelta
+DECAY_PERCENT = 0.05
+DECAY_MONTHS = 3
+LAST_DECAY_KEY = "last_decay"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -178,6 +181,7 @@ async def on_message(message):
     data[user_id].setdefault("level", 1)
     data[user_id].setdefault("last_daily", "")
     data[user_id].setdefault("weekly_xp", 0)
+    data.setdefault(LAST_DECAY_KEY, "")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_bonus = 0
@@ -438,7 +442,60 @@ async def weekly_ranking_task():
             data[user_id]["weekly_xp"] = 0
 
         save_data(data)
+        
+@tasks.loop(hours=24)
+async def decay_task():
 
+    data = load_data()
+
+    if not data:
+        return
+
+    now = datetime.now(timezone.utc)
+
+    last_decay_str = data.get(LAST_DECAY_KEY)
+
+    if last_decay_str:
+        last_decay = datetime.strptime(last_decay_str, "%Y-%m-%d")
+        if now - last_decay < timedelta(days=90):
+            return
+
+    guild = bot.guilds[0]
+    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+
+    results = ""
+
+    for user_id, info in data.items():
+
+        if not isinstance(info, dict):
+            continue
+
+        level = info.get("level", 1)
+
+        decay_amount = int(level * DECAY_PERCENT)
+
+        if decay_amount <= 0:
+            continue
+
+        new_level = max(1, level - decay_amount)
+
+        info["level"] = new_level
+        info["xp"] = 0
+
+        results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
+
+    data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
+
+    save_data(data)
+
+    if notify_channel and results:
+        embed = discord.Embed(
+            title="⚔ レベル減衰が発生しました",
+            description="全ユーザーのレベルが5%減少しました。\n\n" + results[:4000],
+            color=discord.Color.red()
+        )
+        await notify_channel.send(embed=embed)
+        
 # =========================
 # 起動時
 # =========================
@@ -451,6 +508,9 @@ async def on_ready():
 
     if not weekly_ranking_task.is_running():
         weekly_ranking_task.start()
+        
+    if not decay_task.is_running():
+        decay_task.start()
 
 # =========================
 # 実行
