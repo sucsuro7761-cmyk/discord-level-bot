@@ -372,7 +372,7 @@ async def decay_task():
         save_data(data)
         return
 
-    last_dt=datetime.strptime(last_str,"%Y-%m-%d")
+    last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     if (now-last_dt).days<90:
         return
 
