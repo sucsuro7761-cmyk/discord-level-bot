@@ -553,7 +553,7 @@ async def decay_task():
         
         member = guild.get_member(int(user_id))
 if member:
-    await update_rank_role(member, new_level)
+        await update_rank_role(member, new_level)
         
     results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
 
