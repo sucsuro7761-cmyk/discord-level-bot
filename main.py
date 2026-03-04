@@ -12,7 +12,7 @@ import pytz
 
 # =========================
 # Config
-# =========================
+# ========================
 DECAY_PERCENT = 0.05
 LAST_DECAY_KEY = "last_decay"
 
@@ -410,6 +410,24 @@ async def decay_task():
 async def on_ready():
     synced=await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
+
+    if not weekly_ranking_task.is_running():
+        weekly_ranking_task.start()
+    if not weekly_mid_announcement.is_running():
+        weekly_mid_announcement.start()
+    if not decay_task.is_running():
+        decay_task.start()
+    
+    data = load_data()
+    for guild in bot.guilds:
+        for user_id, info in data.items():
+            if user_id == LAST_DECAY_KEY:
+                continue
+
+            member = guild.get_member(int(user_id))
+            if member:
+                await update_rank_role(member, info.get("level", 1))
+    # 🔥 ここまで追加
 
     if not weekly_ranking_task.is_running():
         weekly_ranking_task.start()
