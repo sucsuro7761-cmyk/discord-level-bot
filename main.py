@@ -543,6 +543,25 @@ async def decay_task():
         )
         await notify_channel.send(embed=embed)
         
+@bot.tree.command(name="sync_roles", description="全員のランクロールを再同期（管理者専用）")
+async def sync_roles(interaction: discord.Interaction):
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者専用コマンドです。", ephemeral=True)
+        return
+
+    await interaction.response.send_message("ロールを再同期中...")
+
+    guild = interaction.guild
+    data = load_data()
+
+    for user_id, info in data.items():
+        member = guild.get_member(int(user_id))
+        if member:
+            await update_rank_role(member, info.get("level", 1))
+
+    await interaction.followup.send("✅ 全員のランクロールを再同期しました。")
+        
 # =========================
 # 起動時
 # =========================
