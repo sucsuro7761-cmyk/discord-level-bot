@@ -443,6 +443,53 @@ async def weekly_ranking_task():
 
         save_data(data)
         
+@tasks.loop(minutes=1)
+async def weekly_mid_announcement():
+
+    now = datetime.now(JST)
+
+    # 毎日21:00〜21:01の間
+    if now.hour == 21 and now.minute < 2:
+
+        data = load_data()
+
+        if not data:
+            return
+
+        guild = bot.guilds[0]
+        notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+
+        # weekly_xp順にソート
+        sorted_users = sorted(
+            data.items(),
+            key=lambda x: x[1].get("weekly_xp", 0),
+            reverse=True
+        )
+
+        top5 = sorted_users[:5]
+
+        if not top5:
+            return
+
+        description = ""
+
+        medals = ["🥇", "🥈", "🥉", "④", "⑤"]
+
+        for i, (user_id, info) in enumerate(top5):
+            weekly_xp = info.get("weekly_xp", 0)
+            description += f"{medals[i]} <@{user_id}> - {weekly_xp} XP\n"
+
+        embed = discord.Embed(
+            title="📊 週間ランキング中間発表",
+            description=description,
+            color=discord.Color.blue()
+        )
+
+        embed.set_footer(text="最終結果は月曜18:00に発表！")
+
+        if notify_channel:
+            await notify_channel.send(embed=embed)
+        
 @tasks.loop(hours=24)
 async def decay_task():
 
@@ -511,6 +558,9 @@ async def on_ready():
         
     if not decay_task.is_running():
         decay_task.start()
+    
+    if not weekly_mid_announcement.is_running():
+    weekly_mid_announcement.start()
 
 # =========================
 # 実行
