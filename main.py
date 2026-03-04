@@ -79,6 +79,40 @@ rank_roles = [
     (200, 9999, "VIP")
 ]
 
+# =========================
+# ランクロール更新関数（高速版）
+# =========================
+async def update_rank_role(member, level):
+
+    guild = member.guild
+
+    # 付与すべきランクロールを決定
+    target_role = None
+    for min_lv, max_lv, role_name in rank_roles:
+        if min_lv <= level <= max_lv:
+            target_role = discord.utils.get(guild.roles, name=role_name)
+            break
+
+    # 現在持っているランクロール
+    current_rank_role = None
+    for role in member.roles:
+        for _, _, r_name in rank_roles:
+            if role.name == r_name:
+                current_rank_role = role
+                break
+
+    # 同じロールなら何もしない（超重要）
+    if current_rank_role == target_role:
+        return
+
+    # 古いロールを外す
+    if current_rank_role:
+        await member.remove_roles(current_rank_role)
+
+    # 新しいロールを付与
+    if target_role:
+        await member.add_roles(target_role)
+
 permanent_roles = {
     3: "PHOTO+"
 }
@@ -131,20 +165,6 @@ async def check_level_up(member, channel, data, user_id):
         # =========================
         # 🔥 ランクロール（範囲判定版）
         # =========================
-        for min_lv, max_lv, role_name in rank_roles:
-            if min_lv <= new_level <= max_lv:
-
-                target_role = discord.utils.get(guild.roles, name=role_name)
-
-                if target_role:
-
-                    # 既存ランクロール削除
-                    for role in member.roles:
-                        for _, _, r_name in rank_roles:
-                            if role.name == r_name:
-                                await member.remove_roles(role)
-
-                    await member.add_roles(target_role)
 
                     if notify_channel:
                         await notify_channel.send(
