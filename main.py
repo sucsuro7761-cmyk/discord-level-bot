@@ -66,15 +66,15 @@ def save_data(data):
 # =========================
 # レベル設定
 # =========================
-rank_roles = {
-    1: "MEMBER Lite",
-    10: "MEMBER",
-    30: "CORE",
-    50: "SELECT",
-    75: "PREMIUM",
-    100: "VIP Lite",
-    200: "VIP"
-}
+rank_roles = [
+    (1, 9, "MEMBER Lite"),
+    (10, 29, "MEMBER"),
+    (30, 49, "CORE"),
+    (50, 74, "SELECT"),
+    (75, 99, "PREMIUM"),
+    (100, 199, "VIP Lite"),
+    (200, 9999, "VIP")
+]
 
 permanent_roles = {
     3: "PHOTO+"
@@ -120,9 +120,8 @@ async def check_level_up(member, channel, data, user_id):
                 if notify_channel:
                     await notify_channel.send(f"📸 {role_name} を獲得しました！")
 
-        # ランクロール
-        target_role_name = rank_roles.get(new_level)
-        if target_role_name:
+        
+    
             target_role = discord.utils.get(guild.roles, name=target_role_name)
             if target_role:
                 for role in member.roles:
