@@ -424,8 +424,8 @@ async def weekly_mid_announcement():
     now = datetime.now(JST)
     today = now.strftime("%Y-%m-%d")
 
-    # FIX: フラグで二重実行防止 & LAST_DECAY_KEY除外
-    if not (now.hour == 21 and now.minute == 0):
+    # 21:00〜21:02の間なら実行（再起動後でも拾えるよう3分ウィンドウ）
+    if not (now.hour == 21 and now.minute <= 2):
         return
     if _mid_announced_today == today:
         return
@@ -444,12 +444,18 @@ async def weekly_mid_announcement():
         reverse=True
     )
 
+    # データが空（全員0XP）でも送信できるよう分岐
+    if not sorted_users:
+        if notify_channel:
+            await notify_channel.send("📊 今週はまだ誰もXPを獲得していません！")
+        return
+
     top5 = sorted_users[:5]
     desc = ""
     medals = ["🥇", "🥈", "🥉", "④", "⑤"]
 
     for i, (uid, info) in enumerate(top5):
-        desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
+        desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp', 0)} XP\n"
 
     if notify_channel:
         embed = discord.Embed(
@@ -459,7 +465,6 @@ async def weekly_mid_announcement():
         )
         embed.set_footer(text="最終結果は月曜18:00に発表！")
         await notify_channel.send(embed=embed)
-
 # =========================
 # 3ヶ月レベル減衰
 # =========================
