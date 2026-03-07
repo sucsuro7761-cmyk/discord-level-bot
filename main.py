@@ -265,21 +265,27 @@ async def rank(interaction: discord.Interaction):
 # =========================
 # /top
 # =========================
-@bot.tree.command(name="top", description="サーバーランキングを見る")
+@bot.tree.command(name="top", description="XPランキングTOP10")
 async def top(interaction: discord.Interaction):
-    await interaction.response.defer()
-    data = load_data()
-    if not data:
-        await interaction.followup.send("まだデータがありません！")
-        return
 
-    sorted_users = sorted(data.items(), key=lambda x: (x[1].get("level", 0), x[1].get("xp", 0)), reverse=True)
-    embed = discord.Embed(title="🏆 全サーバーランキング TOP10", color=discord.Color.gold())
-    desc = ""
-    for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-        desc += f"**{i}位** <@{user_id}> - Lv{info.get('level',0)} ({info.get('xp',0)}XP)\n"
-    embed.description = desc
-    await interaction.followup.send(embed=embed)
+    users = load_data()
+
+    ranking = sorted(
+        users.items(),
+        key=lambda x: x[1]["xp"],
+        reverse=True
+    )
+
+    message = "🏆 **XPランキング TOP10**\n\n"
+
+    for i, (user_id, data) in enumerate(ranking[:10], start=1):
+
+        level = data["level"]
+        xp = data["xp"]
+
+        message += f"{i}. <@{user_id}> Lv{level} ({xp}XP)\n"
+
+    await interaction.response.send_message(message)
 
 # =========================
 # /myxp
