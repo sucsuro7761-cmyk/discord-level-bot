@@ -170,6 +170,8 @@ async def on_message(message):
     data = load_data()
     if user_id not in data:
         data[user_id] = {}
+        
+    xp = int(random.randint(15, 25) * XP_MULTIPLIER)
 
     data[user_id].setdefault("xp", 0)
     data[user_id].setdefault("level", 1)
@@ -227,6 +229,13 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and not after.channel:
         vc_users[user_id] = False
+
+# =========================
+# XP BOOST SYSTEM
+# =========================
+
+XP_MULTIPLIER = 1
+BOOST_ACTIVE = False
 
 # =========================
 # /rank
@@ -330,6 +339,64 @@ async def weekly_ranking_task():
         for uid in data:
             data[uid]["weekly_xp"]=0
         save_data(data)
+        
+# =========================
+# XP BOOST TASK
+# =========================
+
+@tasks.loop(hours=24)
+async def xp_boost_scheduler():
+
+    await bot.wait_until_ready()
+
+    global XP_MULTIPLIER
+    global BOOST_ACTIVE
+
+    channel = bot.get_channel(1477839103151177864)
+
+    # 午前ブースト（8〜12時のどこか）
+    morning_hour = random.randint(8, 11)
+
+    # 夜ブースト（18〜23時のどこか）
+    night_hour = random.randint(18, 22)
+
+    boosts = [morning_hour, night_hour]
+
+    for hour in boosts:
+
+        now = datetime.datetime.now()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+        if now > target:
+            target += datetime.timedelta(days=1)
+
+        wait = (target - now).total_seconds()
+
+        await asyncio.sleep(wait)
+
+        # ===== BOOST START =====
+        BOOST_ACTIVE = True
+
+        if random.random() < 0.05:
+            XP_MULTIPLIER = 3
+        else:
+            XP_MULTIPLIER = 2
+
+        if channel:
+            await channel.send(
+                f"🔥 **XP BOOST START!**\n"
+                f"XPが **{XP_MULTIPLIER}倍** になりました！\n"
+                f"1時間限定！"
+            )
+
+        await asyncio.sleep(3600)
+
+        # ===== BOOST END =====
+        XP_MULTIPLIER = 1
+        BOOST_ACTIVE = False
+
+        if channel:
+            await channel.send("⏱ **XP BOOST 終了！**")
 
 # =========================
 # 週間ランキング中間発表（毎日21時）
