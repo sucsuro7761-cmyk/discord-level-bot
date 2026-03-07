@@ -333,37 +333,54 @@ JST = pytz.timezone("Asia/Tokyo")
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
-    if now.weekday()==0 and now.hour==18 and now.minute<2:
-        data = load_data()
-        if not data:
-            return
-        guild = bot.guilds[0]
-        notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+    
+    # 月曜18:00ちょうどの1回だけ実行
+    if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
+        return
 
-        sorted_users = sorted(data.items(), key=lambda x: x[1].get("weekly_xp",0), reverse=True)
-        top3 = sorted_users[:3]
+    data = load_data()
+    if not data:
+        return
 
-        for role_name in weekly_roles.values():
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                for member in role.members:
-                    await member.remove_roles(role)
+    guild = bot.guilds[0]
+    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
-        text = ""
-        for i,(user_id,info) in enumerate(top3,start=1):
-            role = discord.utils.get(guild.roles, name=weekly_roles[i])
-            member = guild.get_member(int(user_id))
-            if role and member:
-                await member.add_roles(role)
-            text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp',0)} XP\n"
+    # ✅ LAST_DECAY_KEY を除外
+    sorted_users = sorted(
+        [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
+        key=lambda x: x[1].get("weekly_xp", 0),
+        reverse=True
+    )
+    top3 = sorted_users[:3]
 
-        if notify_channel:
-            embed=discord.Embed(title="🏆 週間ランキング結果発表！",description=text,color=discord.Color.gold())
-            await notify_channel.send(embed=embed)
+    # 既存の週間ロールを全員から剥奪
+    for role_name in weekly_roles.values():
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role:
+            for member in role.members:
+                await member.remove_roles(role)
 
-        for uid in data:
-            data[uid]["weekly_xp"]=0
-        save_data(data)
+    text = ""
+    for i, (user_id, info) in enumerate(top3, start=1):
+        role = discord.utils.get(guild.roles, name=weekly_roles[i])
+        member = guild.get_member(int(user_id))
+        if role and member:
+            await member.add_roles(role)
+        text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp', 0)} XP\n"
+
+    if notify_channel:
+        embed = discord.Embed(
+            title="🏆 週間ランキング結果発表！",
+            description=text,
+            color=discord.Color.gold()
+        )
+        await notify_channel.send(embed=embed)
+
+    # weekly_xp をリセット
+    for uid in data:
+        if uid != LAST_DECAY_KEY:
+            data[uid]["weekly_xp"] = 0
+    save_data(data)
         
 # =========================
 # XP BOOST TASK
