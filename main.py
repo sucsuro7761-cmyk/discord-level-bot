@@ -12,7 +12,7 @@ import pytz
 
 # =========================
 # Config
-# ========================
+# =========================
 DECAY_PERCENT = 0.05
 LAST_DECAY_KEY = "last_decay"
 
@@ -28,6 +28,18 @@ LEVEL_CHANNEL_ID = 1477839103151177864
 
 cooldowns = {}
 vc_users = {}
+
+# =========================
+# XP BOOST SYSTEM
+# =========================
+XP_MULTIPLIER = 1
+BOOST_ACTIVE = False
+
+# =========================
+# 二重実行防止フラグ
+# =========================
+_weekly_announced = None
+_mid_announced_today = None
 
 # =========================
 # Flask keep alive
@@ -58,6 +70,8 @@ def load_data():
             return {}
 
 def save_data(data):
+    # FIX: /data ディレクトリが存在しない場合でも自動作成
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
@@ -90,14 +104,12 @@ weekly_roles = {
 async def update_rank_role(member, level):
     guild = member.guild
 
-    # Determine target role
     target_role = None
     for min_lv, max_lv, role_name in rank_roles:
         if min_lv <= level <= max_lv:
             target_role = discord.utils.get(guild.roles, name=role_name)
             break
 
-    # Find current rank role
     current_rank_role = None
     for role in member.roles:
         for _, _, r_name in rank_roles:
@@ -105,15 +117,12 @@ async def update_rank_role(member, level):
                 current_rank_role = role
                 break
 
-    # If no change needed
     if current_rank_role == target_role:
         return
 
-    # Remove old
     if current_rank_role:
         await member.remove_roles(current_rank_role)
 
-    # Add new
     if target_role:
         await member.add_roles(target_role)
 
@@ -136,14 +145,11 @@ async def check_level_up(member, channel, data, user_id):
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
 
-        # rank update
         await update_rank_role(member, new_level)
 
-        # Level-up notify
         if notify_channel:
             await notify_channel.send(f"🎉 {member.mention} が Lv{new_level} になりました！")
 
-        # Permanent role
         if new_level in permanent_roles:
             role_name = permanent_roles[new_level]
             role = discord.utils.get(guild.roles, name=role_name)
@@ -170,8 +176,6 @@ async def on_message(message):
     data = load_data()
     if user_id not in data:
         data[user_id] = {}
-        
-    xp = int(random.randint(15, 25) * XP_MULTIPLIER)
 
     data[user_id].setdefault("xp", 0)
     data[user_id].setdefault("level", 1)
@@ -186,6 +190,7 @@ async def on_message(message):
         data[user_id]["last_daily"] = today
         await message.channel.send(f"🎁 {message.author.mention} デイリーボーナス！ +100XP")
 
+    # FIX: 未使用の xp 変数を削除し、xp_gain だけを使う
     xp_gain = int(random.randint(5, 20) * XP_MULTIPLIER)
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
@@ -220,23 +225,17 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("level", 1)
             data[user_id].setdefault("last_daily", "")
             data[user_id].setdefault("weekly_xp", 0)
-            gain = int(10 * XP_MULTIPLIER)
 
-            data[user_id]["xp"] += 10
-            data[user_id]["weekly_xp"] += 10
+            # FIX: gain変数を正しく使う（XP_MULTIPLIERを反映）
+            gain = int(10 * XP_MULTIPLIER)
+            data[user_id]["xp"] += gain
+            data[user_id]["weekly_xp"] += gain
 
             await check_level_up(member, member.guild.system_channel, data, user_id)
             save_data(data)
 
     if before.channel and not after.channel:
         vc_users[user_id] = False
-
-# =========================
-# XP BOOST SYSTEM
-# =========================
-
-XP_MULTIPLIER = 1
-BOOST_ACTIVE = False
 
 # =========================
 # /rank
@@ -268,42 +267,27 @@ async def rank(interaction: discord.Interaction):
 # =========================
 @bot.tree.command(name="top", description="XPランキングTOP10")
 async def top(interaction: discord.Interaction):
-
     await interaction.response.defer()
 
     users = load_data()
 
-    ranking = [
-        (uid, info) for uid, info in users.items()
-        if uid != LAST_DECAY_KEY
-    ]
-
     ranking = sorted(
-    ranking,
-    key=lambda x: (x[1].get("level", 1), x[1].get("xp", 0)),
-    reverse=True
-)
-
-    embed = discord.Embed(
-        title="🏆 XPランキング TOP10",
-        color=discord.Color.gold()
+        [(uid, info) for uid, info in users.items() if uid != LAST_DECAY_KEY],
+        key=lambda x: (x[1].get("level", 1), x[1].get("xp", 0)),
+        reverse=True
     )
 
+    embed = discord.Embed(title="🏆 XPランキング TOP10", color=discord.Color.gold())
     medals = ["🥇", "🥈", "🥉"]
-
     text = ""
 
     for i, (user_id, data) in enumerate(ranking[:10], start=1):
-
         level = data.get("level", 1)
         xp = data.get("xp", 0)
-
         icon = medals[i-1] if i <= 3 else f"{i}."
-
         text += f"{icon} <@{user_id}> | Lv{level} | {xp}XP\n"
 
     embed.description = text
-
     await interaction.followup.send(embed=embed)
 
 # =========================
@@ -332,11 +316,16 @@ JST = pytz.timezone("Asia/Tokyo")
 
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
+    global _weekly_announced
     now = datetime.now(JST)
-    
-    # 月曜18:00ちょうどの1回だけ実行
+    today = now.strftime("%Y-%m-%d")
+
+    # FIX: 月曜18:00に1回だけ実行（フラグで二重実行防止）
     if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
         return
+    if _weekly_announced == today:
+        return
+    _weekly_announced = today
 
     data = load_data()
     if not data:
@@ -345,7 +334,6 @@ async def weekly_ranking_task():
     guild = bot.guilds[0]
     notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
-    # ✅ LAST_DECAY_KEY を除外
     sorted_users = sorted(
         [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
         key=lambda x: x[1].get("weekly_xp", 0),
@@ -353,7 +341,6 @@ async def weekly_ranking_task():
     )
     top3 = sorted_users[:3]
 
-    # 既存の週間ロールを全員から剥奪
     for role_name in weekly_roles.values():
         role = discord.utils.get(guild.roles, name=role_name)
         if role:
@@ -376,53 +363,41 @@ async def weekly_ranking_task():
         )
         await notify_channel.send(embed=embed)
 
-    # weekly_xp をリセット
     for uid in data:
         if uid != LAST_DECAY_KEY:
             data[uid]["weekly_xp"] = 0
     save_data(data)
-        
+
 # =========================
 # XP BOOST TASK
 # =========================
-
 @tasks.loop(hours=24)
 async def xp_boost_scheduler():
-
     await bot.wait_until_ready()
 
     global XP_MULTIPLIER
     global BOOST_ACTIVE
 
-    channel = bot.get_channel(1477839103151177864)
+    channel = bot.get_channel(LEVEL_CHANNEL_ID)
 
-    # 午前ブースト（8〜12時のどこか）
     morning_hour = random.randint(8, 11)
-
-    # 夜ブースト（18〜23時のどこか）
     night_hour = random.randint(18, 22)
-
     boosts = [morning_hour, night_hour]
 
     for hour in boosts:
-
         now = datetime.now()
         target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
 
+        # FIX: datetime.timedelta → timedelta（正しいインポート済みの関数を使う）
         if now > target:
-            target += datetime.timedelta(days=1)
+            target += timedelta(days=1)
 
         wait = (target - now).total_seconds()
-
         await asyncio.sleep(wait)
 
         # ===== BOOST START =====
         BOOST_ACTIVE = True
-
-        if random.random() < 0.05:
-            XP_MULTIPLIER = 3
-        else:
-            XP_MULTIPLIER = 2
+        XP_MULTIPLIER = 3 if random.random() < 0.05 else 2
 
         if channel:
             await channel.send(
@@ -445,89 +420,96 @@ async def xp_boost_scheduler():
 # =========================
 @tasks.loop(minutes=1)
 async def weekly_mid_announcement():
-
+    global _mid_announced_today
     now = datetime.now(JST)
+    today = now.strftime("%Y-%m-%d")
 
-    if now.hour == 21 and now.minute == 0:
+    # FIX: フラグで二重実行防止 & LAST_DECAY_KEY除外
+    if not (now.hour == 21 and now.minute == 0):
+        return
+    if _mid_announced_today == today:
+        return
+    _mid_announced_today = today
 
-        data = load_data()
-        if not data:
-            return
+    data = load_data()
+    if not data:
+        return
 
-        guild = bot.guilds[0]
-        notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+    guild = bot.guilds[0]
+    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
-        sorted_users = sorted(
-            data.items(),
-            key=lambda x: x[1].get("weekly_xp",0),
-            reverse=True
+    sorted_users = sorted(
+        [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
+        key=lambda x: x[1].get("weekly_xp", 0),
+        reverse=True
+    )
+
+    top5 = sorted_users[:5]
+    desc = ""
+    medals = ["🥇", "🥈", "🥉", "④", "⑤"]
+
+    for i, (uid, info) in enumerate(top5):
+        desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
+
+    if notify_channel:
+        embed = discord.Embed(
+            title="📊 週間ランキング中間発表",
+            description=desc,
+            color=discord.Color.blue()
         )
-
-        top5 = sorted_users[:5]
-
-        desc = ""
-        medals = ["🥇","🥈","🥉","④","⑤"]
-
-        for i,(uid,info) in enumerate(top5):
-            desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
-
-        if notify_channel:
-            embed = discord.Embed(
-                title="📊 週間ランキング中間発表",
-                description=desc,
-                color=discord.Color.blue()
-            )
-            embed.set_footer(text="最終結果は月曜18:00に発表！")
-
-            await notify_channel.send(embed=embed)
+        embed.set_footer(text="最終結果は月曜18:00に発表！")
+        await notify_channel.send(embed=embed)
 
 # =========================
 # 3ヶ月レベル減衰
 # =========================
 @tasks.loop(hours=24)
 async def decay_task():
-    data=load_data()
+    data = load_data()
     if not data:
         return
 
     now = datetime.now(timezone.utc)
-    last_str=data.get(LAST_DECAY_KEY,"")
+    last_str = data.get(LAST_DECAY_KEY, "")
 
-    # 初回-safe
     if not last_str:
-        data[LAST_DECAY_KEY]=now.strftime("%Y-%m-%d")
+        data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
         save_data(data)
         return
 
     last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    if (now-last_dt).days<90:
+    if (now - last_dt).days < 90:
         return
 
-    guild=bot.guilds[0]
-    notify_channel=guild.get_channel(LEVEL_CHANNEL_ID)
+    guild = bot.guilds[0]
+    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
 
-    results=""
-    for user_id,info in data.items():
-        if user_id==LAST_DECAY_KEY:
+    results = ""
+    for user_id, info in data.items():
+        if user_id == LAST_DECAY_KEY:
             continue
 
-        level=info.get("level",1)
-        decay=int(level*DECAY_PERCENT)
-        new_level=max(1,level-decay)
-        info["level"]=new_level
-        info["xp"]=0
+        level = info.get("level", 1)
+        decay = int(level * DECAY_PERCENT)
+        new_level = max(1, level - decay)
+        info["level"] = new_level
+        info["xp"] = 0
 
-        member=guild.get_member(int(user_id))
+        member = guild.get_member(int(user_id))
         if member:
-            await update_rank_role(member,new_level)
+            await update_rank_role(member, new_level)
 
-        results+=f"<@{user_id}> Lv{level} → Lv{new_level}\n"
+        results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
 
-    data[LAST_DECAY_KEY]=now.strftime("%Y-%m-%d")
+    data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
     save_data(data)
 
     if notify_channel and results:
-        embed=discord.Embed(title="⚔ レベル減衰が発生しました",description=results,color=discord.Color.red())
+        embed = discord.Embed(
+            title="⚔ レベル減衰が発生しました",
+            description=results,
+            color=discord.Color.red()
+        )
         await notify_channel.send(embed=embed)
 
 # =========================
@@ -554,21 +536,19 @@ async def on_ready():
 
     for guild in bot.guilds:
         for user_id, info in data.items():
-
             if user_id == LAST_DECAY_KEY:
                 continue
-
             member = guild.get_member(int(user_id))
-
             if member:
                 await update_rank_role(member, info.get("level", 1))
+                await asyncio.sleep(0.5)  # FIX: レートリミット対策
 
 # =========================
 # Run
 # =========================
-if __name__=="__main__":
+if __name__ == "__main__":
     keep_alive()
-    token=os.environ.get("TOKEN")
+    token = os.environ.get("TOKEN")
     if token:
         bot.run(token)
     else:
