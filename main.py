@@ -426,7 +426,7 @@ async def xp_boost_scheduler():
 # =========================
 # 週間ランキング中間発表（毎日21時）
 # =========================
-@@tasks.loop(minutes=1)
+@tasks.loop(minutes=1)
 async def weekly_mid_announcement():
 
     now = datetime.now(JST)
