@@ -426,24 +426,42 @@ async def xp_boost_scheduler():
 # =========================
 # 週間ランキング中間発表（毎日21時）
 # =========================
-@tasks.loop(minutes=1)
+@@tasks.loop(minutes=1)
 async def weekly_mid_announcement():
+
     now = datetime.now(JST)
-    if now.hour==21 and now.minute<2:
+
+    if now.hour == 21 and now.minute == 0:
+
         data = load_data()
         if not data:
             return
+
         guild = bot.guilds[0]
         notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-        sorted_users = sorted(data.items(), key=lambda x: x[1].get("weekly_xp",0), reverse=True)
-        top5=sorted_users[:5]
-        desc=""
-        medals=["🥇","🥈","🥉","④","⑤"]
+
+        sorted_users = sorted(
+            data.items(),
+            key=lambda x: x[1].get("weekly_xp",0),
+            reverse=True
+        )
+
+        top5 = sorted_users[:5]
+
+        desc = ""
+        medals = ["🥇","🥈","🥉","④","⑤"]
+
         for i,(uid,info) in enumerate(top5):
-            desc+=f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
+            desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
+
         if notify_channel:
-            embed=discord.Embed(title="📊 週間ランキング中間発表",description=desc,color=discord.Color.blue())
+            embed = discord.Embed(
+                title="📊 週間ランキング中間発表",
+                description=desc,
+                color=discord.Color.blue()
+            )
             embed.set_footer(text="最終結果は月曜18:00に発表！")
+
             await notify_channel.send(embed=embed)
 
 # =========================
