@@ -279,10 +279,10 @@ async def top(interaction: discord.Interaction):
     ]
 
     ranking = sorted(
-        ranking,
-        key=lambda x: x[1].get("xp", 0),
-        reverse=True
-    )
+    ranking,
+    key=lambda x: (x[1].get("level", 1), x[1].get("xp", 0)),
+    reverse=True
+)
 
     embed = discord.Embed(
         title="🏆 XPランキング TOP10",
