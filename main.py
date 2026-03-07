@@ -186,7 +186,7 @@ async def on_message(message):
         data[user_id]["last_daily"] = today
         await message.channel.send(f"🎁 {message.author.mention} デイリーボーナス！ +100XP")
 
-    xp_gain = random.randint(5, 20)
+    xp_gain = int(random.randint(5, 20) * XP_MULTIPLIER)
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
 
@@ -220,6 +220,7 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("level", 1)
             data[user_id].setdefault("last_daily", "")
             data[user_id].setdefault("weekly_xp", 0)
+            gain = int(10 * XP_MULTIPLIER)
 
             data[user_id]["xp"] += 10
             data[user_id]["weekly_xp"] += 10
@@ -268,24 +269,42 @@ async def rank(interaction: discord.Interaction):
 @bot.tree.command(name="top", description="XPランキングTOP10")
 async def top(interaction: discord.Interaction):
 
+    await interaction.response.defer()
+
     users = load_data()
 
+    ranking = [
+        (uid, info) for uid, info in users.items()
+        if uid != LAST_DECAY_KEY
+    ]
+
     ranking = sorted(
-        users.items(),
-        key=lambda x: x[1]["xp"],
+        ranking,
+        key=lambda x: x[1].get("xp", 0),
         reverse=True
     )
 
-    message = "🏆 **XPランキング TOP10**\n\n"
+    embed = discord.Embed(
+        title="🏆 XPランキング TOP10",
+        color=discord.Color.gold()
+    )
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    text = ""
 
     for i, (user_id, data) in enumerate(ranking[:10], start=1):
 
-        level = data["level"]
-        xp = data["xp"]
+        level = data.get("level", 1)
+        xp = data.get("xp", 0)
 
-        message += f"{i}. <@{user_id}> Lv{level} ({xp}XP)\n"
+        icon = medals[i-1] if i <= 3 else f"{i}."
 
-    await interaction.response.send_message(message)
+        text += f"{icon} <@{user_id}> | Lv{level} | {xp}XP\n"
+
+    embed.description = text
+
+    await interaction.followup.send(embed=embed)
 
 # =========================
 # /myxp
@@ -370,7 +389,7 @@ async def xp_boost_scheduler():
 
     for hour in boosts:
 
-        now = datetime.datetime.now()
+        now = datetime.now()
         target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
 
         if now > target:
@@ -481,33 +500,33 @@ async def decay_task():
 # =========================
 @bot.event
 async def on_ready():
-    synced=await bot.tree.sync()
+    synced = await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
 
     if not weekly_ranking_task.is_running():
         weekly_ranking_task.start()
+
     if not weekly_mid_announcement.is_running():
         weekly_mid_announcement.start()
+
     if not decay_task.is_running():
         decay_task.start()
-    
+
+    if not xp_boost_scheduler.is_running():
+        xp_boost_scheduler.start()
+
     data = load_data()
+
     for guild in bot.guilds:
         for user_id, info in data.items():
+
             if user_id == LAST_DECAY_KEY:
                 continue
 
             member = guild.get_member(int(user_id))
+
             if member:
                 await update_rank_role(member, info.get("level", 1))
-    # 🔥 ここまで追加
-
-    if not weekly_ranking_task.is_running():
-        weekly_ranking_task.start()
-    if not weekly_mid_announcement.is_running():
-        weekly_mid_announcement.start()
-    if not decay_task.is_running():
-        decay_task.start()
 
 # =========================
 # Run
