@@ -385,14 +385,14 @@ async def xp_boost_scheduler():
     boosts = [morning_hour, night_hour]
 
     for hour in boosts:
-        now = datetime.now()
+        now = datetime.now(JST)  # FIX: JSTタイムゾーンを使用
         target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
 
-        # FIX: datetime.timedelta → timedelta（正しいインポート済みの関数を使う）
-        if now > target:
-            target += timedelta(days=1)
-
+        # FIX: waitが絶対マイナスにならないよう保証
         wait = (target - now).total_seconds()
+        if wait < 0:
+            continue  # 既に過ぎた時間はスキップ
+
         await asyncio.sleep(wait)
 
         # ===== BOOST START =====
@@ -414,7 +414,7 @@ async def xp_boost_scheduler():
 
         if channel:
             await channel.send("⏱ **XP BOOST 終了！**")
-
+        
 # =========================
 # 週間ランキング中間発表（毎日21時）
 # =========================
