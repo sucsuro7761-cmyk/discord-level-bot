@@ -24,7 +24,7 @@ intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 DATA_FILE = “/data/levels.json”
 LEVEL_CHANNEL_ID = 1477839103151177864
