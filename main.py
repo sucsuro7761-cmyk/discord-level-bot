@@ -17,7 +17,7 @@ import pytz
 # =========================
 
 DECAY_PERCENT = 0.05
-LAST_DECAY_KEY = "last_decay"
+LAST_DECAY_KEY = “last_decay”
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -877,6 +877,99 @@ embed.add_field(
 embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
 embed.add_field(name="⚔️ あなたのダメージ", value=f"{my_dmg}ダメージ", inline=False)
 await interaction.response.send_message(embed=embed)
+```
+
+# =========================
+
+# サーバー参加時：ロール＆チャンネル自動作成
+
+# =========================
+
+@bot.event
+async def on_guild_join(guild):
+
+```
+# ===== 作成するロール一覧 =====
+roles_to_create = [
+    # ランクロール（画像の色に合わせて設定）
+    {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},  # グレー
+    {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},  # 緑
+    {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},  # 濃い緑
+    {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},  # 青
+    {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},  # 金
+    {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},  # 薄紫
+    {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},  # 紫
+    # 週間ランキングロール
+    {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},  # 金
+    {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},  # 銀
+    {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},  # 銅
+    # その他
+    {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},  # 白
+    {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},  # 赤
+]
+
+created_roles = []
+for role_data in roles_to_create:
+    # すでに同名ロールがあればスキップ
+    if discord.utils.get(guild.roles, name=role_data["name"]):
+        continue
+    try:
+        await guild.create_role(
+            name=role_data["name"],
+            color=role_data["color"],
+            reason="Bot自動セットアップ"
+        )
+        created_roles.append(role_data["name"])
+        await asyncio.sleep(0.5)  # レートリミット対策
+    except discord.Forbidden:
+        pass
+
+# ===== 通知チャンネル作成 =====
+notify_channel = None
+existing = discord.utils.get(guild.text_channels, name="レベル通知")
+if existing:
+    notify_channel = existing
+else:
+    try:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
+            guild.me: discord.PermissionOverwrite(send_messages=True, read_messages=True)
+        }
+        notify_channel = await guild.create_text_channel(
+            name="レベル通知",
+            overwrites=overwrites,
+            reason="Bot自動セットアップ"
+        )
+    except discord.Forbidden:
+        pass
+
+# ===== 完了通知を送信 =====
+if notify_channel:
+    embed = discord.Embed(
+        title="👋 セットアップ完了！",
+        description=(
+            "レベルBotの準備ができました！\n\n"
+            "**作成されたもの**\n"
+            f"📢 通知チャンネル: {notify_channel.mention}\n"
+            f"🎭 ロール: {len(created_roles)}個作成\n\n"
+            "**使い方**\n"
+            "メッセージを送るとXPが貯まります！\n"
+            "VCに2人以上いるとXPが貯まります！\n"
+            "毎週月曜に週ボスが出現します！"
+        ),
+        color=discord.Color.green()
+    )
+    embed.add_field(
+        name="📋 コマンド一覧",
+        value=(
+            "`/rank` - 自分のランク確認\n"
+            "`/myxp` - XP詳細確認\n"
+            "`/top` - ランキングTOP10\n"
+            "`/boss` - 週ボス状況確認"
+        )
+    )
+    embed.set_footer(text=f"通知チャンネルID: {notify_channel.id}（必要に応じてコードのLEVEL_CHANNEL_IDを変更してください）")
+    await notify_channel.send(embed=embed)
 ```
 
 # =========================
