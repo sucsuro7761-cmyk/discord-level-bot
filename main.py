@@ -109,7 +109,8 @@ rank_roles = [
     (50, 74, "SELECT"),
     (75, 99, "PREMIUM"),
     (100, 199, "VIP Lite"),
-    (200, 9999, "VIP")
+    (200, 999, "VIP"),
+    (1000, 9999, "Legend")
 ]
 
 permanent_roles = {
