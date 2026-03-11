@@ -19,7 +19,7 @@ import pytz
 # =========================
 
 DECAY_PERCENT = 0.05
-LAST_DECAY_KEY = 'last_decay'
+LAST_DECAY_KEY = "last_decay"
 
 intents = discord.Intents.default()
 intents.message_content = True
