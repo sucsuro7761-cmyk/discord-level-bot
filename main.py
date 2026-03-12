@@ -207,14 +207,51 @@ async def on_message(message):
     data[user_id].setdefault("level", 1)
     data[user_id].setdefault("last_daily", "")
     data[user_id].setdefault("weekly_xp", 0)
+    data[user_id].setdefault("login_streak", 0)  # 連続ログイン日数
     data.setdefault(LAST_DECAY_KEY, "")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
     if data[user_id]["last_daily"] != today:
-        data[user_id]["xp"] += 100
-        data[user_id]["weekly_xp"] += 100
+
+        # 連続ログイン判定
+        if data[user_id]["last_daily"] == yesterday:
+            data[user_id]["login_streak"] += 1  # 連続継続
+        else:
+            data[user_id]["login_streak"] = 1   # リセット
+
+        streak = data[user_id]["login_streak"]
+
+        # 連続日数に応じたボーナスXP
+        if streak == 1:
+            bonus = 100
+        elif streak == 2:
+            bonus = 200
+        elif streak == 3:
+            bonus = 300
+        elif streak == 4:
+            bonus = 500
+        else:
+            bonus = 1000
+
+        data[user_id]["xp"] += bonus
+        data[user_id]["weekly_xp"] += bonus
         data[user_id]["last_daily"] = today
-        await message.channel.send(f"🎁 {message.author.mention} デイリーボーナス！ +100XP")
+
+        # 連続日数に応じたメッセージ
+        if streak == 1:
+            streak_msg = "🎁 **デイリーボーナス！**"
+        elif streak < 5:
+            streak_msg = f"🔥 **{streak}日連続ログイン！**"
+        else:
+            streak_msg = f"🌟 **{streak}日連続ログイン！MAX ボーナス！**"
+
+        await message.channel.send(
+            f"{streak_msg}\n"
+            f"{message.author.mention} **+{bonus}XP** "
+            f"（連続{streak}日目）"
+        )
 
     xp_gain = int(random.randint(5, 20) * XP_MULTIPLIER)
     data[user_id]["xp"] += xp_gain
@@ -354,11 +391,36 @@ async def myxp(interaction: discord.Interaction):
         return
 
     info = data[user_id]
+    streak = info.get("login_streak", 0)
+
+    # 連続日数の表示
+    if streak >= 5:
+        streak_display = f"🌟 {streak}日（MAXボーナス中！）"
+    elif streak >= 2:
+        streak_display = f"🔥 {streak}日連続"
+    else:
+        streak_display = f"{streak}日"
+
+    # 次回ボーナス額を表示
+    next_streak = streak + 1
+    if next_streak <= 1:
+        next_bonus = 100
+    elif next_streak == 2:
+        next_bonus = 200
+    elif next_streak == 3:
+        next_bonus = 300
+    elif next_streak == 4:
+        next_bonus = 500
+    else:
+        next_bonus = 1000
+
     embed = discord.Embed(title=f"📊 {interaction.user.name} のデータ", color=discord.Color.green())
-    embed.add_field(name="レベル", value=f"Lv {info.get('level',1)}")
-    embed.add_field(name="XP", value=f"{info.get('xp',0)} XP")
-    embed.add_field(name="今週のXP", value=f"{info.get('weekly_xp',0)} XP")
-    embed.add_field(name="最終デイリーボーナス", value=info.get('last_daily','なし'))
+    embed.add_field(name="レベル", value=f"Lv {info.get('level', 1)}")
+    embed.add_field(name="XP", value=f"{info.get('xp', 0)} XP")
+    embed.add_field(name="今週のXP", value=f"{info.get('weekly_xp', 0)} XP")
+    embed.add_field(name="連続ログイン", value=streak_display)
+    embed.add_field(name="次回デイリーボーナス", value=f"+{next_bonus} XP")
+    embed.add_field(name="最終デイリーボーナス", value=info.get('last_daily', 'なし'))
     await interaction.response.send_message(embed=embed)
 
 # =========================
@@ -393,6 +455,15 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     boss = load_boss()
     boss_dmg = boss.get("damage", {}).get(user_id, 0) if boss.get("active") else 0
 
+    # 連続ログイン表示
+    streak = info.get("login_streak", 0)
+    if streak >= 5:
+        streak_display = f"🌟 {streak}日（MAX）"
+    elif streak >= 2:
+        streak_display = f"🔥 {streak}日連続"
+    else:
+        streak_display = f"{streak}日"
+
     embed = discord.Embed(
         title=f"🔍 {member.name} のデータ",
         color=discord.Color.orange()
@@ -402,6 +473,7 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     embed.add_field(name="ランク", value=current_rank)
     embed.add_field(name="XP", value=f"{xp} / {required_xp}\n{bar} {int(progress*100)}%", inline=False)
     embed.add_field(name="今週のXP", value=f"{info.get('weekly_xp', 0)} XP")
+    embed.add_field(name="連続ログイン", value=streak_display)
     embed.add_field(name="最終デイリー", value=info.get("last_daily", "なし"))
     embed.add_field(name="今週のボスダメージ", value=f"{boss_dmg} ダメージ")
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -423,7 +495,7 @@ async def alldata(interaction: discord.Interaction):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["UserID", "Username", "Level", "XP", "WeeklyXP", "LastDaily"])
+    writer.writerow(["UserID", "Username", "Level", "XP", "WeeklyXP", "LastDaily", "LoginStreak"])
 
     for uid, info in data.items():
         if uid == LAST_DECAY_KEY:
@@ -436,7 +508,8 @@ async def alldata(interaction: discord.Interaction):
             info.get("level", 1),
             info.get("xp", 0),
             info.get("weekly_xp", 0),
-            info.get("last_daily", "")
+            info.get("last_daily", ""),
+            info.get("login_streak", 0)
         ])
 
     output.seek(0)
