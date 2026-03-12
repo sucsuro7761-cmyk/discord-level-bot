@@ -17,6 +17,8 @@ import pytz
 # =========================
 DECAY_PERCENT = 0.05
 LAST_DECAY_KEY = "last_decay"
+DATA_DIR = "/data"
+JST = pytz.timezone("Asia/Tokyo")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,47 +27,112 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-DATA_FILE = "/data/levels.json"
-LEVEL_CHANNEL_ID = 1477839103151177864
-
 cooldowns = {}
 vc_users = {}
 
 # =========================
-# XP BOOST SYSTEM
+# XP BOOST SYSTEM（サーバーごと）
 # =========================
-XP_MULTIPLIER = 1
-BOOST_ACTIVE = False
+# { guild_id: {"multiplier": 1, "active": False} }
+guild_boost = {}
+
+def get_boost(guild_id):
+    return guild_boost.get(guild_id, {"multiplier": 1, "active": False})
+
+def set_boost(guild_id, multiplier, active):
+    guild_boost[guild_id] = {"multiplier": multiplier, "active": active}
 
 # =========================
-# 二重実行防止フラグ
+# 二重実行防止フラグ（サーバーごと）
 # =========================
-_weekly_announced = None
-_mid_announced_today = None
+_weekly_announced = {}    # { guild_id: date_str }
+_mid_announced_today = {} # { guild_id: date_str }
+_boss_spawn_announced = {} # { guild_id: date_str }
 
 # =========================
 # 週ボスシステム Config
 # =========================
-BOSS_FILE = "/data/boss.json"
-BOSS_BASE_HP = 30000       # 初期HP
-BOSS_HP_SCALE = 1.2        # クリアごとのHP倍率
-BOSS_CLEAR_ROLE = "⚔️ボス討伐者"  # 討伐成功時に付与するロール名
+BOSS_BASE_HP = 30000
+BOSS_HP_SCALE = 1.2
+BOSS_CLEAR_ROLE = "⚔️ボス討伐者"
 
-def load_boss():
-    if not os.path.exists(BOSS_FILE):
+# =========================
+# ファイルパス（サーバーごと）
+# =========================
+def data_file(guild_id):
+    return f"{DATA_DIR}/levels_{guild_id}.json"
+
+def boss_file(guild_id):
+    return f"{DATA_DIR}/boss_{guild_id}.json"
+
+def config_file():
+    return f"{DATA_DIR}/config.json"
+
+# =========================
+# Config read/write（通知チャンネルID保存）
+# =========================
+def load_config():
+    path = config_file()
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_config(config):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(config_file(), "w") as f:
+        json.dump(config, f, indent=4)
+
+def get_level_channel_id(guild_id):
+    config = load_config()
+    return config.get(str(guild_id), {}).get("level_channel_id")
+
+def set_level_channel_id(guild_id, channel_id):
+    config = load_config()
+    gid = str(guild_id)
+    if gid not in config:
+        config[gid] = {}
+    config[gid]["level_channel_id"] = channel_id
+    save_config(config)
+
+# =========================
+# Data read/write（サーバーごと）
+# =========================
+def load_data(guild_id):
+    path = data_file(guild_id)
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {}
+
+def save_data(guild_id, data):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(data_file(guild_id), "w") as f:
+        json.dump(data, f, indent=4)
+
+# =========================
+# Boss read/write（サーバーごと）
+# =========================
+def load_boss(guild_id):
+    path = boss_file(guild_id)
+    if not os.path.exists(path):
         return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
-    with open(BOSS_FILE, "r") as f:
+    with open(path, "r") as f:
         try:
             return json.load(f)
         except json.JSONDecodeError:
             return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
 
-def save_boss(boss):
-    os.makedirs(os.path.dirname(BOSS_FILE), exist_ok=True)
-    with open(BOSS_FILE, "w") as f:
+def save_boss(guild_id, boss):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(boss_file(guild_id), "w") as f:
         json.dump(boss, f, indent=4)
-
-_boss_spawn_announced = None
 
 # =========================
 # Flask keep alive
@@ -82,23 +149,6 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
-
-# =========================
-# Data read/write
-# =========================
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    with open(DATA_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
-
-def save_data(data):
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
 
 # =========================
 # Rank definitions
@@ -145,19 +195,18 @@ async def update_rank_role(member, level):
 
     if current_rank_role == target_role:
         return
-
     if current_rank_role:
         await member.remove_roles(current_rank_role)
-
     if target_role:
         await member.add_roles(target_role)
 
 # =========================
 # Level-up check
 # =========================
-async def check_level_up(member, channel, data, user_id):
+async def check_level_up(member, data, user_id):
     guild = member.guild
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+    ch_id = get_level_channel_id(guild.id)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
 
     while True:
         current_xp = data[user_id]["xp"]
@@ -192,14 +241,16 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    guild_id = message.guild.id
     user_id = str(message.author.id)
     current_time = time.time()
 
-    if user_id in cooldowns and current_time - cooldowns[user_id] < 10:
+    ck = f"{guild_id}:{user_id}"
+    if ck in cooldowns and current_time - cooldowns[ck] < 10:
         return
-    cooldowns[user_id] = current_time
+    cooldowns[ck] = current_time
 
-    data = load_data()
+    data = load_data(guild_id)
     if user_id not in data:
         data[user_id] = {}
 
@@ -207,23 +258,20 @@ async def on_message(message):
     data[user_id].setdefault("level", 1)
     data[user_id].setdefault("last_daily", "")
     data[user_id].setdefault("weekly_xp", 0)
-    data[user_id].setdefault("login_streak", 0)  # 連続ログイン日数
+    data[user_id].setdefault("login_streak", 0)
     data.setdefault(LAST_DECAY_KEY, "")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if data[user_id]["last_daily"] != today:
-
-        # 連続ログイン判定
         if data[user_id]["last_daily"] == yesterday:
-            data[user_id]["login_streak"] += 1  # 連続継続
+            data[user_id]["login_streak"] += 1
         else:
-            data[user_id]["login_streak"] = 1   # リセット
+            data[user_id]["login_streak"] = 1
 
         streak = data[user_id]["login_streak"]
 
-        # 連続日数に応じたボーナスXP
         if streak == 1:
             bonus = 100
         elif streak == 2:
@@ -239,7 +287,6 @@ async def on_message(message):
         data[user_id]["weekly_xp"] += bonus
         data[user_id]["last_daily"] = today
 
-        # 連続日数に応じたメッセージ
         if streak == 1:
             streak_msg = "🎁 **デイリーボーナス！**"
         elif streak < 5:
@@ -253,26 +300,25 @@ async def on_message(message):
             f"（連続{streak}日目）"
         )
 
-    xp_gain = int(random.randint(5, 20) * XP_MULTIPLIER)
+    boost = get_boost(guild_id)
+    xp_gain = int(random.randint(5, 20) * boost["multiplier"])
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
 
-    await check_level_up(message.author, message.channel, data, user_id)
-    save_data(data)
+    await check_level_up(message.author, data, user_id)
+    save_data(guild_id, data)
 
-    # ボスが出現中ならダメージを与える
-    boss = load_boss()
+    boss = load_boss(guild_id)
     if boss.get("active"):
-        dmg = xp_gain
-        boss["damage"][user_id] = boss["damage"].get(user_id, 0) + dmg
-        boss["hp"] = max(0, boss["hp"] - dmg)
+        boss["damage"][user_id] = boss["damage"].get(user_id, 0) + xp_gain
+        boss["hp"] = max(0, boss["hp"] - xp_gain)
         if boss["hp"] <= 0:
             boss["active"] = False
             boss["cleared"] += 1
-            save_boss(boss)
+            save_boss(guild_id, boss)
             await handle_boss_clear(message.guild, boss)
         else:
-            save_boss(boss)
+            save_boss(guild_id, boss)
 
     await bot.process_commands(message)
 
@@ -284,18 +330,20 @@ async def on_voice_state_update(member, before, after):
     if member.bot:
         return
 
+    guild_id = member.guild.id
     user_id = str(member.id)
+    ck = f"{guild_id}:{user_id}"
 
     if after.channel and not before.channel:
-        vc_users[user_id] = True
-        while vc_users.get(user_id):
+        vc_users[ck] = True
+        while vc_users.get(ck):
             await asyncio.sleep(30)
             if not member.voice or not member.voice.channel:
                 break
             if len(member.voice.channel.members) < 2:
                 continue
 
-            data = load_data()
+            data = load_data(guild_id)
             if user_id not in data:
                 data[user_id] = {}
             data[user_id].setdefault("xp", 0)
@@ -303,28 +351,28 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("last_daily", "")
             data[user_id].setdefault("weekly_xp", 0)
 
-            gain = int(10 * XP_MULTIPLIER)
+            boost = get_boost(guild_id)
+            gain = int(10 * boost["multiplier"])
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
 
-            await check_level_up(member, member.guild.system_channel, data, user_id)
-            save_data(data)
+            await check_level_up(member, data, user_id)
+            save_data(guild_id, data)
 
-            # ボスが出現中ならVCXPでもダメージを与える
-            boss = load_boss()
+            boss = load_boss(guild_id)
             if boss.get("active"):
                 boss["damage"][user_id] = boss["damage"].get(user_id, 0) + gain
                 boss["hp"] = max(0, boss["hp"] - gain)
                 if boss["hp"] <= 0:
                     boss["active"] = False
                     boss["cleared"] += 1
-                    save_boss(boss)
+                    save_boss(guild_id, boss)
                     await handle_boss_clear(member.guild, boss)
                 else:
-                    save_boss(boss)
+                    save_boss(guild_id, boss)
 
     if before.channel and not after.channel:
-        vc_users[user_id] = False
+        vc_users[ck] = False
 
 # =========================
 # /rank
@@ -332,7 +380,7 @@ async def on_voice_state_update(member, before, after):
 @bot.tree.command(name="rank", description="自分のレベルを確認")
 async def rank(interaction: discord.Interaction):
     await interaction.response.defer()
-    data = load_data()
+    data = load_data(interaction.guild.id)
     user_id = str(interaction.user.id)
     if user_id not in data:
         await interaction.followup.send("まだデータがありません！")
@@ -357,8 +405,7 @@ async def rank(interaction: discord.Interaction):
 @bot.tree.command(name="top", description="XPランキングTOP10")
 async def top(interaction: discord.Interaction):
     await interaction.response.defer()
-
-    users = load_data()
+    users = load_data(interaction.guild.id)
 
     ranking = sorted(
         [(uid, info) for uid, info in users.items() if uid != LAST_DECAY_KEY],
@@ -370,9 +417,9 @@ async def top(interaction: discord.Interaction):
     medals = ["🥇", "🥈", "🥉"]
     text = ""
 
-    for i, (user_id, data) in enumerate(ranking[:10], start=1):
-        level = data.get("level", 1)
-        xp = data.get("xp", 0)
+    for i, (user_id, info) in enumerate(ranking[:10], start=1):
+        level = info.get("level", 1)
+        xp = info.get("xp", 0)
         icon = medals[i-1] if i <= 3 else f"{i}."
         text += f"{icon} <@{user_id}> | Lv{level} | {xp}XP\n"
 
@@ -384,7 +431,7 @@ async def top(interaction: discord.Interaction):
 # =========================
 @bot.tree.command(name="myxp", description="自分のXPやレベルを確認")
 async def myxp(interaction: discord.Interaction):
-    data = load_data()
+    data = load_data(interaction.guild.id)
     user_id = str(interaction.user.id)
     if user_id not in data:
         await interaction.response.send_message("まだデータがありません！")
@@ -393,7 +440,6 @@ async def myxp(interaction: discord.Interaction):
     info = data[user_id]
     streak = info.get("login_streak", 0)
 
-    # 連続日数の表示
     if streak >= 5:
         streak_display = f"🌟 {streak}日（MAXボーナス中！）"
     elif streak >= 2:
@@ -401,7 +447,6 @@ async def myxp(interaction: discord.Interaction):
     else:
         streak_display = f"{streak}日"
 
-    # 次回ボーナス額を表示
     next_streak = streak + 1
     if next_streak <= 1:
         next_bonus = 100
@@ -420,16 +465,16 @@ async def myxp(interaction: discord.Interaction):
     embed.add_field(name="今週のXP", value=f"{info.get('weekly_xp', 0)} XP")
     embed.add_field(name="連続ログイン", value=streak_display)
     embed.add_field(name="次回デイリーボーナス", value=f"+{next_bonus} XP")
-    embed.add_field(name="最終デイリーボーナス", value=info.get('last_daily', 'なし'))
+    embed.add_field(name="最終デイリーボーナス", value=info.get("last_daily", "なし"))
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# /userdata（管理者用：特定ユーザーのデータ確認）
+# /userdata（管理者用）
 # =========================
 @bot.tree.command(name="userdata", description="ユーザーのデータを確認（管理者用）")
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def userdata(interaction: discord.Interaction, member: discord.Member):
-    data = load_data()
+    data = load_data(interaction.guild.id)
     user_id = str(member.id)
 
     if user_id not in data:
@@ -444,18 +489,15 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     filled = int(20 * progress)
     bar = "█" * filled + "░" * (20 - filled)
 
-    # 現在のランク名を取得
     current_rank = "なし"
     for min_lv, max_lv, role_name in rank_roles:
         if min_lv <= level <= max_lv:
             current_rank = role_name
             break
 
-    # 今週のボスダメージ
-    boss = load_boss()
+    boss = load_boss(interaction.guild.id)
     boss_dmg = boss.get("damage", {}).get(user_id, 0) if boss.get("active") else 0
 
-    # 連続ログイン表示
     streak = info.get("login_streak", 0)
     if streak >= 5:
         streak_display = f"🌟 {streak}日（MAX）"
@@ -464,10 +506,7 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     else:
         streak_display = f"{streak}日"
 
-    embed = discord.Embed(
-        title=f"🔍 {member.name} のデータ",
-        color=discord.Color.orange()
-    )
+    embed = discord.Embed(title=f"🔍 {member.name} のデータ", color=discord.Color.orange())
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="レベル", value=f"Lv {level}")
     embed.add_field(name="ランク", value=current_rank)
@@ -484,13 +523,13 @@ async def userdata_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 # =========================
-# /alldata（管理者用：全ユーザーデータをCSV出力）
+# /alldata（管理者用）
 # =========================
 @bot.tree.command(name="alldata", description="全ユーザーデータをCSVで出力（管理者用）")
 @discord.app_commands.checks.has_permissions(administrator=True)
 async def alldata(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    data = load_data()
+    data = load_data(interaction.guild.id)
     guild = interaction.guild
 
     output = io.StringIO()
@@ -514,9 +553,9 @@ async def alldata(interaction: discord.Interaction):
 
     output.seek(0)
     now_str = datetime.now(JST).strftime("%Y%m%d_%H%M")
-    filename = f"userdata_{now_str}.csv"
+    filename = f"userdata_{guild.id}_{now_str}.csv"
     file = discord.File(
-        fp=io.BytesIO(output.getvalue().encode("utf-8-sig")),  # Excel対応BOM付きUTF-8
+        fp=io.BytesIO(output.getvalue().encode("utf-8-sig")),
         filename=filename
     )
     user_count = sum(1 for k in data if k != LAST_DECAY_KEY)
@@ -532,80 +571,74 @@ async def alldata_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 # =========================
-# 週間ランキング（Final）
+# 週間ランキング（全サーバー）
 # =========================
-JST = pytz.timezone("Asia/Tokyo")
-
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
-    global _weekly_announced
     now = datetime.now(JST)
     today = now.strftime("%Y-%m-%d")
 
     if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
         return
-    if _weekly_announced == today:
-        return
-    _weekly_announced = today
 
-    data = load_data()
-    if not data:
-        return
+    for guild in bot.guilds:
+        gid = guild.id
+        if _weekly_announced.get(gid) == today:
+            continue
+        _weekly_announced[gid] = today
 
-    guild = bot.guilds[0]
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+        data = load_data(gid)
+        if not data:
+            continue
 
-    sorted_users = sorted(
-        [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
-        key=lambda x: x[1].get("weekly_xp", 0),
-        reverse=True
-    )
-    top3 = sorted_users[:3]
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    for role_name in weekly_roles.values():
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            for member in role.members:
-                await member.remove_roles(role)
-
-    text = ""
-    for i, (user_id, info) in enumerate(top3, start=1):
-        role = discord.utils.get(guild.roles, name=weekly_roles[i])
-        member = guild.get_member(int(user_id))
-        if role and member:
-            await member.add_roles(role)
-        text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp', 0)} XP\n"
-
-    if notify_channel:
-        embed = discord.Embed(
-            title="🏆 週間ランキング結果発表！",
-            description=text,
-            color=discord.Color.gold()
+        sorted_users = sorted(
+            [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
+            key=lambda x: x[1].get("weekly_xp", 0),
+            reverse=True
         )
-        await notify_channel.send(embed=embed)
+        top3 = sorted_users[:3]
 
-    for uid in data:
-        if uid != LAST_DECAY_KEY:
-            data[uid]["weekly_xp"] = 0
-    save_data(data)
+        for role_name in weekly_roles.values():
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                for member in role.members:
+                    await member.remove_roles(role)
+
+        text = ""
+        for i, (user_id, info) in enumerate(top3, start=1):
+            role = discord.utils.get(guild.roles, name=weekly_roles[i])
+            member = guild.get_member(int(user_id))
+            if role and member:
+                await member.add_roles(role)
+            text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp', 0)} XP\n"
+
+        if notify_channel:
+            embed = discord.Embed(
+                title="🏆 週間ランキング結果発表！",
+                description=text,
+                color=discord.Color.gold()
+            )
+            await notify_channel.send(embed=embed)
+
+        for uid in data:
+            if uid != LAST_DECAY_KEY:
+                data[uid]["weekly_xp"] = 0
+        save_data(gid, data)
 
 # =========================
-# XP BOOST TASK
+# XP BOOST TASK（全サーバー）
 # =========================
 @tasks.loop(hours=24)
 async def xp_boost_scheduler():
     await bot.wait_until_ready()
 
-    global XP_MULTIPLIER
-    global BOOST_ACTIVE
-
-    channel = bot.get_channel(LEVEL_CHANNEL_ID)
-
     morning_hour = random.randint(8, 11)
     night_hour = random.randint(18, 22)
-    boosts = [morning_hour, night_hour]
 
-    for hour in boosts:
+    for hour in [morning_hour, night_hour]:
         now = datetime.now(JST)
         target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
 
@@ -615,142 +648,139 @@ async def xp_boost_scheduler():
         wait = (target - now).total_seconds()
         await asyncio.sleep(wait)
 
-        # ===== BOOST START =====
-        BOOST_ACTIVE = True
-        XP_MULTIPLIER = 3 if random.random() < 0.05 else 2
+        multiplier = 3 if random.random() < 0.05 else 2
 
-        if channel:
-            await channel.send(
-                f"🔥 **XP BOOST START!**\n"
-                f"XPが **{XP_MULTIPLIER}倍** になりました！\n"
-                f"1時間限定！"
-            )
+        for guild in bot.guilds:
+            set_boost(guild.id, multiplier, True)
+            ch_id = get_level_channel_id(guild.id)
+            channel = guild.get_channel(ch_id) if ch_id else None
+            if channel:
+                await channel.send(
+                    f"🔥 **XP BOOST START!**\n"
+                    f"XPが **{multiplier}倍** になりました！\n"
+                    f"1時間限定！"
+                )
 
         await asyncio.sleep(3600)
 
-        # ===== BOOST END =====
-        XP_MULTIPLIER = 1
-        BOOST_ACTIVE = False
-
-        if channel:
-            await channel.send("⏱ **XP BOOST 終了！**")
+        for guild in bot.guilds:
+            set_boost(guild.id, 1, False)
+            ch_id = get_level_channel_id(guild.id)
+            channel = guild.get_channel(ch_id) if ch_id else None
+            if channel:
+                await channel.send("⏱ **XP BOOST 終了！**")
 
 # =========================
-# 週間ランキング中間発表（毎日21時）
+# 週間ランキング中間発表（全サーバー・毎日21時）
 # =========================
 @tasks.loop(minutes=1)
 async def weekly_mid_announcement():
-    global _mid_announced_today
     now = datetime.now(JST)
     today = now.strftime("%Y-%m-%d")
 
     if not (now.hour == 21 and now.minute == 0):
         return
-    if _mid_announced_today == today:
-        return
-    _mid_announced_today = today
 
-    data = load_data()
-    if not data:
-        return
+    for guild in bot.guilds:
+        gid = guild.id
+        if _mid_announced_today.get(gid) == today:
+            continue
+        _mid_announced_today[gid] = today
 
-    guild = bot.guilds[0]
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
+        data = load_data(gid)
+        if not data:
+            continue
 
-    sorted_users = sorted(
-        [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
-        key=lambda x: x[1].get("weekly_xp", 0),
-        reverse=True
-    )
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    top5 = sorted_users[:5]
-    desc = ""
-    medals = ["🥇", "🥈", "🥉", "④", "⑤"]
-
-    for i, (uid, info) in enumerate(top5):
-        desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp',0)} XP\n"
-
-    if notify_channel:
-        embed = discord.Embed(
-            title="📊 週間ランキング中間発表",
-            description=desc,
-            color=discord.Color.blue()
+        sorted_users = sorted(
+            [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
+            key=lambda x: x[1].get("weekly_xp", 0),
+            reverse=True
         )
-        embed.set_footer(text="最終結果は月曜18:00に発表！")
-        await notify_channel.send(embed=embed)
+
+        desc = ""
+        medals = ["🥇", "🥈", "🥉", "④", "⑤"]
+        for i, (uid, info) in enumerate(sorted_users[:5]):
+            desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp', 0)} XP\n"
+
+        if notify_channel:
+            embed = discord.Embed(
+                title="📊 週間ランキング中間発表",
+                description=desc,
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="最終結果は月曜18:00に発表！")
+            await notify_channel.send(embed=embed)
 
 # =========================
-# 3ヶ月レベル減衰
+# 3ヶ月レベル減衰（全サーバー）
 # =========================
 @tasks.loop(hours=24)
 async def decay_task():
-    data = load_data()
-    if not data:
-        return
-
-    now = datetime.now(timezone.utc)
-    last_str = data.get(LAST_DECAY_KEY, "")
-
-    if not last_str:
-        data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
-        save_data(data)
-        return
-
-    last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    if (now - last_dt).days < 90:
-        return
-
-    guild = bot.guilds[0]
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-
-    results = ""
-    for user_id, info in data.items():
-        if user_id == LAST_DECAY_KEY:
+    for guild in bot.guilds:
+        gid = guild.id
+        data = load_data(gid)
+        if not data:
             continue
 
-        level = info.get("level", 1)
-        decay = int(level * DECAY_PERCENT)
-        new_level = max(1, level - decay)
-        info["level"] = new_level
-        info["xp"] = 0
+        now = datetime.now(timezone.utc)
+        last_str = data.get(LAST_DECAY_KEY, "")
 
-        member = guild.get_member(int(user_id))
-        if member:
-            await update_rank_role(member, new_level)
+        if not last_str:
+            data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
+            save_data(gid, data)
+            continue
 
-        results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
+        last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if (now - last_dt).days < 90:
+            continue
 
-    data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
-    save_data(data)
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    if notify_channel and results:
-        embed = discord.Embed(
-            title="⚔ レベル減衰が発生しました",
-            description=results,
-            color=discord.Color.red()
-        )
-        await notify_channel.send(embed=embed)
+        results = ""
+        for user_id, info in data.items():
+            if user_id == LAST_DECAY_KEY:
+                continue
+            level = info.get("level", 1)
+            decay = int(level * DECAY_PERCENT)
+            new_level = max(1, level - decay)
+            info["level"] = new_level
+            info["xp"] = 0
+            member = guild.get_member(int(user_id))
+            if member:
+                await update_rank_role(member, new_level)
+            results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
+
+        data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
+        save_data(gid, data)
+
+        if notify_channel and results:
+            embed = discord.Embed(
+                title="⚔ レベル減衰が発生しました",
+                description=results,
+                color=discord.Color.red()
+            )
+            await notify_channel.send(embed=embed)
 
 # =========================
 # 週ボス：討伐成功処理
 # =========================
 async def handle_boss_clear(guild, boss):
-    global XP_MULTIPLIER, BOOST_ACTIVE
+    gid = guild.id
+    ch_id = get_level_channel_id(gid)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-
-    # 討伐者全員にロール付与
     role = discord.utils.get(guild.roles, name=BOSS_CLEAR_ROLE)
     for uid, dmg in boss["damage"].items():
         if dmg <= 0:
             continue
         member = guild.get_member(int(uid))
-        if not member:
-            continue
-        if role:
+        if member and role:
             await member.add_roles(role)
 
-    # ダメージTOP3
     sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
     mvp_text = ""
     medals = ["🥇", "🥈", "🥉"]
@@ -769,15 +799,14 @@ async def handle_boss_clear(guild, boss):
         embed.set_footer(text=f"次のボスHP: {next_hp:,}")
         await notify_channel.send(embed=embed)
 
-    asyncio.create_task(boss_clear_boost(notify_channel))
+    asyncio.create_task(boss_clear_boost(guild, notify_channel))
 
 # =========================
-# 週ボス：討伐ブースト（次の月曜6時まで）
+# 週ボス：討伐ブースト
 # =========================
-async def boss_clear_boost(notify_channel):
-    global XP_MULTIPLIER, BOOST_ACTIVE
-    BOOST_ACTIVE = True
-    XP_MULTIPLIER = 2
+async def boss_clear_boost(guild, notify_channel):
+    gid = guild.id
+    set_boost(gid, 2, True)
     if notify_channel:
         await notify_channel.send("🔥 **討伐記念 XP 2倍ブースト開始！** 次のボス出現まで継続！")
 
@@ -789,120 +818,116 @@ async def boss_clear_boost(notify_channel):
     wait_seconds = (next_monday - now).total_seconds()
     await asyncio.sleep(wait_seconds)
 
-    XP_MULTIPLIER = 1
-    BOOST_ACTIVE = False
+    set_boost(gid, 1, False)
     if notify_channel:
         await notify_channel.send("⏱ **討伐ブースト終了！** 新しいボスが出現しました！")
 
 # =========================
-# 週ボス：出現タスク（月曜6時）
+# 週ボス：出現タスク（全サーバー・月曜6時）
 # =========================
 @tasks.loop(minutes=1)
 async def boss_spawn_task():
-    global _boss_spawn_announced
     now = datetime.now(JST)
     today = now.strftime("%Y-%m-%d")
 
     if not (now.weekday() == 0 and now.hour == 6 and now.minute <= 2):
         return
-    if _boss_spawn_announced == today:
-        return
-    _boss_spawn_announced = today
 
-    boss = load_boss()
+    for guild in bot.guilds:
+        gid = guild.id
+        if _boss_spawn_announced.get(gid) == today:
+            continue
+        _boss_spawn_announced[gid] = today
 
-    if boss.get("active"):
-        guild = bot.guilds[0]
-        notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-        if notify_channel:
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+
+        boss = load_boss(gid)
+
+        if boss.get("active") and notify_channel:
             await notify_channel.send("💀 **ボスは討伐されませんでした...**\n今週こそリベンジだ！")
 
-    global XP_MULTIPLIER, BOOST_ACTIVE
-    XP_MULTIPLIER = 1
-    BOOST_ACTIVE = False
+        set_boost(gid, 1, False)
 
-    cleared = boss.get("cleared", 0)
-    new_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared))
+        cleared = boss.get("cleared", 0)
+        new_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared))
 
-    new_boss = {
-        "active": True,
-        "hp": new_hp,
-        "max_hp": new_hp,
-        "damage": {},
-        "week": boss.get("week", 0) + 1,
-        "cleared": cleared
-    }
-    save_boss(new_boss)
+        new_boss = {
+            "active": True,
+            "hp": new_hp,
+            "max_hp": new_hp,
+            "damage": {},
+            "week": boss.get("week", 0) + 1,
+            "cleared": cleared
+        }
+        save_boss(gid, new_boss)
 
-    guild = bot.guilds[0]
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-    if notify_channel:
-        embed = discord.Embed(
-            title=f"👹 週ボス出現！ Week {new_boss['week']}",
-            description=(
-                f"ボスが現れた！今週中に倒せ！\n\n"
-                f"メッセージを送るだけで自動攻撃！\n"
-                f"討伐成功で特別ロールをGET！"
-            ),
-            color=discord.Color.red()
-        )
-        embed.add_field(name="❤️ HP", value=f"{new_hp:,} / {new_hp:,}")
-        embed.add_field(name="⚔️ 攻撃方法", value="メッセージ送信 or VC参加で自動攻撃！")
-        embed.add_field(name="🎁 討伐報酬", value="次のボス出現まで XP 2倍ブースト ＋ 特別ロール")
-        embed.set_footer(text="2時間ごとにダメージ報告あり")
-        await notify_channel.send(embed=embed)
+        if notify_channel:
+            embed = discord.Embed(
+                title=f"👹 週ボス出現！ Week {new_boss['week']}",
+                description=(
+                    "ボスが現れた！今週中に倒せ！\n\n"
+                    "メッセージを送るだけで自動攻撃！\n"
+                    "討伐成功で特別ロールをGET！"
+                ),
+                color=discord.Color.red()
+            )
+            embed.add_field(name="❤️ HP", value=f"{new_hp:,} / {new_hp:,}")
+            embed.add_field(name="⚔️ 攻撃方法", value="メッセージ送信 or VC参加で自動攻撃！")
+            embed.add_field(name="🎁 討伐報酬", value="次のボス出現まで XP 2倍ブースト ＋ 特別ロール")
+            embed.set_footer(text="2時間ごとにダメージ報告あり")
+            await notify_channel.send(embed=embed)
 
 # =========================
-# 週ボス：2時間ごとダメージ報告
+# 週ボス：2時間ごとダメージ報告（全サーバー）
 # =========================
 @tasks.loop(hours=2)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
-    boss = load_boss()
-    if not boss.get("active"):
-        return
+    for guild in bot.guilds:
+        gid = guild.id
+        boss = load_boss(gid)
+        if not boss.get("active"):
+            continue
 
-    guild = bot.guilds[0]
-    notify_channel = guild.get_channel(LEVEL_CHANNEL_ID)
-    if not notify_channel:
-        return
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if not notify_channel:
+            continue
 
-    max_hp = boss.get("max_hp", 1)
-    current_hp = boss.get("hp", 0)
-    progress = (max_hp - current_hp) / max_hp
-    filled = int(20 * progress)
-    bar = "█" * filled + "░" * (20 - filled)
-    percent = int(progress * 100)
+        max_hp = boss.get("max_hp", 1)
+        current_hp = boss.get("hp", 0)
+        progress = (max_hp - current_hp) / max_hp
+        filled = int(20 * progress)
+        bar = "█" * filled + "░" * (20 - filled)
+        percent = int(progress * 100)
 
-    sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
-    top_text = ""
-    medals = ["🥇", "🥈", "🥉"]
-    for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
-        top_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
+        sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
+        top_text = ""
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
+            top_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
 
-    if not top_text:
-        top_text = "まだ誰も攻撃していません！"
+        if not top_text:
+            top_text = "まだ誰も攻撃していません！"
 
-    embed = discord.Embed(
-        title="⚔️ 週ボス ダメージレポート",
-        color=discord.Color.orange()
-    )
-    embed.add_field(
-        name="❤️ ボスHP",
-        value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}",
-        inline=False
-    )
-    embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
-    embed.set_footer(text="メッセージを送って攻撃しよう！")
-    await notify_channel.send(embed=embed)
+        embed = discord.Embed(title="⚔️ 週ボス ダメージレポート", color=discord.Color.orange())
+        embed.add_field(
+            name="❤️ ボスHP",
+            value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}",
+            inline=False
+        )
+        embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
+        embed.set_footer(text="メッセージを送って攻撃しよう！")
+        await notify_channel.send(embed=embed)
 
 # =========================
-# /boss コマンド（ボス状況確認）
+# /boss コマンド
 # =========================
 @bot.tree.command(name="boss", description="今週のボス状況を確認")
 async def boss_status(interaction: discord.Interaction):
-    boss = load_boss()
+    boss = load_boss(interaction.guild.id)
 
     if not boss.get("active"):
         await interaction.response.send_message("現在ボスは出現していません。月曜6時に出現します！")
@@ -930,11 +955,7 @@ async def boss_status(interaction: discord.Interaction):
         title=f"👹 週ボス状況 - Week {boss.get('week', 1)}",
         color=discord.Color.red()
     )
-    embed.add_field(
-        name="❤️ ボスHP",
-        value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}",
-        inline=False
-    )
+    embed.add_field(name="❤️ ボスHP", value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}", inline=False)
     embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
     embed.add_field(name="⚔️ あなたのダメージ", value=f"{my_dmg}ダメージ", inline=False)
     await interaction.response.send_message(embed=embed)
@@ -944,7 +965,6 @@ async def boss_status(interaction: discord.Interaction):
 # =========================
 @bot.event
 async def on_guild_join(guild):
-
     roles_to_create = [
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
@@ -953,7 +973,7 @@ async def on_guild_join(guild):
         {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
-        {"name": "Legend",       "color": discord.Color.from_rgb(255, 215,   0)},  # 金色
+        {"name": "Legend",       "color": discord.Color.from_rgb(255, 215,   0)},
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
@@ -994,7 +1014,10 @@ async def on_guild_join(guild):
         except discord.Forbidden:
             pass
 
+    # チャンネルIDをconfig.jsonに保存
     if notify_channel:
+        set_level_channel_id(guild.id, notify_channel.id)
+
         embed = discord.Embed(
             title="👋 セットアップ完了！",
             description=(
@@ -1020,7 +1043,6 @@ async def on_guild_join(guild):
                 "`/alldata` - 全データCSV出力（管理者）"
             )
         )
-        embed.set_footer(text=f"通知チャンネルID: {notify_channel.id}（必要に応じてコードのLEVEL_CHANNEL_IDを変更してください）")
         await notify_channel.send(embed=embed)
 
 # =========================
@@ -1030,28 +1052,31 @@ async def on_guild_join(guild):
 async def on_ready():
     synced = await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
+    print(f"接続中のサーバー: {[g.name for g in bot.guilds]}")
 
     if not weekly_ranking_task.is_running():
         weekly_ranking_task.start()
-
     if not weekly_mid_announcement.is_running():
         weekly_mid_announcement.start()
-
     if not decay_task.is_running():
         decay_task.start()
-
     if not xp_boost_scheduler.is_running():
         xp_boost_scheduler.start()
-
     if not boss_spawn_task.is_running():
         boss_spawn_task.start()
-
     if not boss_damage_report.is_running():
         boss_damage_report.start()
 
-    data = load_data()
-
+    # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
+        # config未登録のサーバーはチャンネルを探して登録
+        if not get_level_channel_id(guild.id):
+            existing = discord.utils.get(guild.text_channels, name="レベル通知")
+            if existing:
+                set_level_channel_id(guild.id, existing.id)
+                print(f"[{guild.name}] レベル通知チャンネルを自動登録しました (ID: {existing.id})")
+
+        data = load_data(guild.id)
         for user_id, info in data.items():
             if user_id == LAST_DECAY_KEY:
                 continue
