@@ -923,6 +923,26 @@ async def boss_damage_report():
         await notify_channel.send(embed=embed)
 
 # =========================
+# /setchannel（管理者用：通知チャンネル変更）
+# =========================
+@bot.tree.command(name="setchannel", description="レベル通知チャンネルを変更（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def setchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    set_level_channel_id(interaction.guild.id, channel.id)
+    embed = discord.Embed(
+        title="✅ 通知チャンネルを変更しました",
+        description=f"レベル通知チャンネルを {channel.mention} に設定しました！",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="レベルアップ・ランキング・ボスなどの通知がこのチャンネルに届きます")
+    await interaction.response.send_message(embed=embed)
+
+@setchannel.error
+async def setchannel_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
+
+# =========================
 # /boss コマンド
 # =========================
 @bot.tree.command(name="boss", description="今週のボス状況を確認")
@@ -1039,6 +1059,7 @@ async def on_guild_join(guild):
                 "`/myxp` - XP詳細確認\n"
                 "`/top` - ランキングTOP10\n"
                 "`/boss` - 週ボス状況確認\n"
+                "`/setchannel` - 通知チャンネル変更（管理者）\n"
                 "`/userdata` - ユーザーデータ確認（管理者）\n"
                 "`/alldata` - 全データCSV出力（管理者）"
             )
