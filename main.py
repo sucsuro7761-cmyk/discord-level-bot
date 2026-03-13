@@ -1071,32 +1071,6 @@ async def on_guild_join(guild):
 # =========================
 @bot.event
 async def on_ready():
-    restore_data = {
-        "1118472855865266246": {"xp": 2136, "level": 25, "weekly_xp": 953, "last_daily": "2026-03-12", "login_streak": 0},
-        "1455553306868056174": {"xp": 463, "level": 16, "weekly_xp": 200, "last_daily": "2026-03-11", "login_streak": 0},
-        "1007650333863968822": {"xp": 275, "level": 14, "weekly_xp": 140, "last_daily": "2026-03-10", "login_streak": 0},
-        "1231780341178568835": {"xp": 201, "level": 4, "weekly_xp": 0, "last_daily": "2026-03-08", "login_streak": 0},
-        "1384513334300381244": {"xp": 190, "level": 2, "weekly_xp": 158, "last_daily": "2026-03-09", "login_streak": 0},
-        "1228848979471503500": {"xp": 658, "level": 10, "weekly_xp": 0, "last_daily": "2026-03-08", "login_streak": 0},
-        "1280788868957995031": {"xp": 365, "level": 4, "weekly_xp": 0, "last_daily": "2026-03-08", "login_streak": 0},
-        "1209806040254779446": {"xp": 295, "level": 9, "weekly_xp": 276, "last_daily": "2026-03-10", "login_streak": 0},
-        "1449590372429856891": {"xp": 27, "level": 7, "weekly_xp": 0, "last_daily": "2026-03-03", "login_streak": 0},
-        "1338074103977873438": {"xp": 348, "level": 6, "weekly_xp": 0, "last_daily": "2026-03-04", "login_streak": 0},
-        "1421475181351665764": {"xp": 20, "level": 2, "weekly_xp": 0, "last_daily": "2026-03-01", "login_streak": 0},
-        "1194205534019133530": {"xp": 29, "level": 2, "weekly_xp": 0, "last_daily": "2026-03-02", "login_streak": 0},
-        "1333735909207707688": {"xp": 280, "level": 6, "weekly_xp": 0, "last_daily": "", "login_streak": 0},
-        "1394638315013148866": {"xp": 34, "level": 5, "weekly_xp": 231, "last_daily": "2026-03-11", "login_streak": 0},
-        "1118112252806053979": {"xp": 1004, "level": 11, "weekly_xp": 0, "last_daily": "2026-03-04", "login_streak": 0},
-        "1429356213753348131": {"xp": 322, "level": 6, "weekly_xp": 0, "last_daily": "2026-03-05", "login_streak": 0},
-        "1264203079528616049": {"xp": 14, "level": 2, "weekly_xp": 0, "last_daily": "2026-03-04", "login_streak": 0},
-        "904237147370975264": {"xp": 41, "level": 2, "weekly_xp": 0, "last_daily": "2026-03-04", "login_streak": 0},
-        "1352633788395552771": {"xp": 201, "level": 4, "weekly_xp": 0, "last_daily": "2026-03-05", "login_streak": 0},
-        "last_decay": ""
-    }
-    os.makedirs("/data", exist_ok=True)
-    with open("/data/levels_1332006524465188904.json", "w") as f:
-        json.dump(restore_data, f, indent=4)
-    print("✅ データ復元完了！")
     synced = await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
     print(f"接続中のサーバー: {[g.name for g in bot.guilds]}")
