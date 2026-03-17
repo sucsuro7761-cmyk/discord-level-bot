@@ -910,9 +910,9 @@ async def boss_spawn_task():
             await notify_channel.send(embed=embed)
 
 # =========================
-# 週ボス：2時間ごとダメージ報告（全サーバー）
+# 週ボス：6時間ごとダメージ報告（全サーバー）
 # =========================
-@tasks.loop(hours=2)
+@tasks.loop(hours=6)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
