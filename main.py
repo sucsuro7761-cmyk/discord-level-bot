@@ -939,7 +939,7 @@ async def boss_spawn_task():
 # =========================
 # 週ボス：2時間ごとダメージ報告（全サーバー）
 # =========================
-@tasks.loop(hours=2)
+@tasks.loop(hours=8)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
