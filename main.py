@@ -31,16 +31,27 @@ cooldowns = {}
 vc_users = {}
 
 # =========================
-# XP BOOST SYSTEM（サーバーごと）
+# XP BOOST SYSTEM（サーバーごと・独立管理）
 # =========================
-# { guild_id: {"multiplier": 1, "active": False} }
-guild_boost = {}
+# 時間帯ブースト: { guild_id: multiplier }  1=無効
+guild_time_boost = {}
+# ボス討伐ブースト: { guild_id: multiplier }  1=無効
+guild_boss_boost = {}
 
 def get_boost(guild_id):
-    return guild_boost.get(guild_id, {"multiplier": 1, "active": False})
+    """2つのブーストを掛け合わせた最終倍率を返す"""
+    time_m = guild_time_boost.get(guild_id, 1)
+    boss_m = guild_boss_boost.get(guild_id, 1)
+    total = time_m * boss_m
+    return {"multiplier": total, "active": total > 1}
 
-def set_boost(guild_id, multiplier, active):
-    guild_boost[guild_id] = {"multiplier": multiplier, "active": active}
+def set_time_boost(guild_id, multiplier):
+    """時間帯ブーストをセット（1=無効）"""
+    guild_time_boost[guild_id] = multiplier
+
+def set_boss_boost(guild_id, multiplier):
+    """ボス討伐ブーストをセット（1=無効）"""
+    guild_boss_boost[guild_id] = multiplier
 
 # =========================
 # 二重実行防止フラグ（サーバーごと）
@@ -159,8 +170,8 @@ rank_roles = [
     (30, 49, "CORE"),
     (50, 74, "SELECT"),
     (75, 99, "PREMIUM"),
-    (100, 150, "VIP Lite"),
-    (151, 999, "VIP"),
+    (100, 199, "VIP Lite"),
+    (200, 999, "VIP"),
     (1000, 9999, "Legend")
 ]
 
@@ -630,45 +641,60 @@ async def weekly_ranking_task():
 
 # =========================
 # XP BOOST TASK（全サーバー）
+# 毎日ランダムな時間帯に2回発動（朝8-11時・夜18-22時）
 # =========================
-@tasks.loop(hours=24)
+
+# 当日のブースト予定時刻を保持 { "YYYY-MM-DD": [hour1, hour2] }
+_boost_schedule = {}
+# 発動済みフラグ { "YYYY-MM-DD_hour": True }
+_boost_fired = {}
+
+@tasks.loop(minutes=1)
 async def xp_boost_scheduler():
-    await bot.wait_until_ready()
+    now = datetime.now(JST)
+    today = now.strftime("%Y-%m-%d")
 
-    morning_hour = random.randint(8, 11)
-    night_hour = random.randint(18, 22)
+    # 当日のスケジュールをまだ決めていなければ決める
+    if today not in _boost_schedule:
+        morning_hour = random.randint(8, 11)
+        night_hour = random.randint(18, 22)
+        _boost_schedule[today] = [morning_hour, night_hour]
+        # 前日以前のスケジュールを削除
+        for key in list(_boost_schedule.keys()):
+            if key < today:
+                del _boost_schedule[key]
+        for key in list(_boost_fired.keys()):
+            if key.split("_")[0] < today:
+                del _boost_fired[key]
 
-    for hour in [morning_hour, night_hour]:
-        now = datetime.now(JST)
-        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-
-        if now > target:
+    for hour in _boost_schedule[today]:
+        fire_key = f"{today}_{hour}"
+        if _boost_fired.get(fire_key):
             continue
+        if now.hour == hour and now.minute == 0:
+            _boost_fired[fire_key] = True
+            multiplier = 3 if random.random() < 0.05 else 2
 
-        wait = (target - now).total_seconds()
-        await asyncio.sleep(wait)
+            for guild in bot.guilds:
+                set_time_boost(guild.id, multiplier)
+                ch_id = get_level_channel_id(guild.id)
+                channel = guild.get_channel(ch_id) if ch_id else None
+                if channel:
+                    await channel.send(
+                        f"🔥 **XP BOOST START!**\n"
+                        f"XPが **{multiplier}倍** になりました！\n"
+                        f"1時間限定！"
+                    )
 
-        multiplier = 3 if random.random() < 0.05 else 2
+            # 1時間後に終了
+            await asyncio.sleep(3600)
 
-        for guild in bot.guilds:
-            set_boost(guild.id, multiplier, True)
-            ch_id = get_level_channel_id(guild.id)
-            channel = guild.get_channel(ch_id) if ch_id else None
-            if channel:
-                await channel.send(
-                    f"🔥 **XP BOOST START!**\n"
-                    f"XPが **{multiplier}倍** になりました！\n"
-                    f"1時間限定！"
-                )
-
-        await asyncio.sleep(3600)
-
-        for guild in bot.guilds:
-            set_boost(guild.id, 1, False)
-            ch_id = get_level_channel_id(guild.id)
-            channel = guild.get_channel(ch_id) if ch_id else None
-            if channel:
-                await channel.send("⏱ **XP BOOST 終了！**")
+            for guild in bot.guilds:
+                set_time_boost(guild.id, 1)
+                ch_id = get_level_channel_id(guild.id)
+                channel = guild.get_channel(ch_id) if ch_id else None
+                if channel:
+                    await channel.send("⏱ **XP BOOST 終了！**")
 
 # =========================
 # 週間ランキング中間発表（全サーバー・毎日21時）
@@ -806,7 +832,7 @@ async def handle_boss_clear(guild, boss):
 # =========================
 async def boss_clear_boost(guild, notify_channel):
     gid = guild.id
-    set_boost(gid, 2, True)
+    set_boss_boost(gid, 2)
     if notify_channel:
         await notify_channel.send("🔥 **討伐記念 XP 2倍ブースト開始！** 次のボス出現まで継続！")
 
@@ -818,7 +844,7 @@ async def boss_clear_boost(guild, notify_channel):
     wait_seconds = (next_monday - now).total_seconds()
     await asyncio.sleep(wait_seconds)
 
-    set_boost(gid, 1, False)
+    set_boss_boost(gid, 1)
     if notify_channel:
         await notify_channel.send("⏱ **討伐ブースト終了！** 新しいボスが出現しました！")
 
@@ -845,7 +871,8 @@ async def boss_spawn_task():
         boss = load_boss(gid)
         boss_was_alive = boss.get("active", False)
 
-        set_boost(gid, 1, False)
+        set_boss_boost(gid, 1)
+        set_time_boost(gid, 1)
 
         cleared = boss.get("cleared", 0)
 
@@ -910,9 +937,9 @@ async def boss_spawn_task():
             await notify_channel.send(embed=embed)
 
 # =========================
-# 週ボス：6時間ごとダメージ報告（全サーバー）
+# 週ボス：2時間ごとダメージ報告（全サーバー）
 # =========================
-@tasks.loop(hours=6)
+@tasks.loop(hours=2)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
@@ -1024,7 +1051,7 @@ async def on_guild_join(guild):
         {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
-        {"name": "Legend",       "color": discord.Color.from_rgb(255, 215,   0)},
+        {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},  # ダイヤモンドブルー,
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
@@ -1046,6 +1073,33 @@ async def on_guild_join(guild):
             await asyncio.sleep(0.5)
         except discord.Forbidden:
             pass
+
+    # ロールの位置を整理（Botロールを上に、ランク・週間ロールをその下に）
+    try:
+        # 並び順（上から順に）
+        role_order = [
+            "🥇週間王者", "🥈週間準王", "🥉週間三位",
+            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "CORE", "MEMBER", "MEMBER Lite",
+            "⚔️ボス討伐者", "PHOTO+"
+        ]
+
+        # Botのロールを取得（一番上に移動）
+        bot_role = guild.me.top_role
+        max_pos = bot_role.position - 1  # Botロールの1つ下から配置
+
+        positions = {}
+        for i, role_name in enumerate(role_order):
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                positions[role] = max_pos - i
+
+        if positions:
+            await guild.edit_role_positions(positions=positions)
+    except discord.Forbidden:
+        pass
+    except Exception:
+        pass
 
     notify_channel = None
     existing = discord.utils.get(guild.text_channels, name="レベル通知")
