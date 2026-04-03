@@ -939,7 +939,7 @@ async def boss_spawn_task():
 # =========================
 # 週ボス：2時間ごとダメージ報告（全サーバー）
 # =========================
-@tasks.loop(hours=8)
+@tasks.loop(hours=2)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
@@ -997,6 +997,116 @@ async def setchannel(interaction: discord.Interaction, channel: discord.TextChan
 
 @setchannel.error
 async def setchannel_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
+
+
+# =========================
+# /setuproles（管理者用：ロール・チャンネルの再セットアップ）
+# =========================
+@bot.tree.command(name="setuproles", description="ボット用ロール・通知チャンネルを再作成（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def setuproles(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+
+    roles_to_create = [
+        {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
+        {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
+        {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
+        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
+        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
+        {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
+        {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
+        {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
+        {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
+        {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
+        {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
+    ]
+
+    created_roles = []
+    skipped_roles = []
+
+    for role_data in roles_to_create:
+        if discord.utils.get(guild.roles, name=role_data["name"]):
+            skipped_roles.append(role_data["name"])
+            continue
+        try:
+            await guild.create_role(
+                name=role_data["name"],
+                color=role_data["color"],
+                reason="setuprolesコマンドによる再セットアップ"
+            )
+            created_roles.append(role_data["name"])
+            await asyncio.sleep(0.5)
+        except discord.Forbidden:
+            pass
+
+    # ロール位置の整理
+    try:
+        role_order = [
+            "🥇週間王者", "🥈週間準王", "🥉週間三位",
+            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "CORE", "MEMBER", "MEMBER Lite",
+            "⚔️ボス討伐者", "PHOTO+"
+        ]
+        bot_role = guild.me.top_role
+        max_pos = bot_role.position - 1
+        positions = {}
+        for i, role_name in enumerate(role_order):
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                positions[role] = max_pos - i
+        if positions:
+            await guild.edit_role_positions(positions=positions)
+    except (discord.Forbidden, Exception):
+        pass
+
+    # 通知チャンネルの確認・作成
+    channel_msg = ""
+    notify_channel = None
+    existing = discord.utils.get(guild.text_channels, name="レベル通知")
+    if existing:
+        channel_msg = f"📢 通知チャンネルは既に存在します: {existing.mention}"
+        if not get_level_channel_id(guild.id):
+            set_level_channel_id(guild.id, existing.id)
+    else:
+        try:
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
+                guild.me: discord.PermissionOverwrite(send_messages=True, read_messages=True)
+            }
+            notify_channel = await guild.create_text_channel(
+                name="レベル通知",
+                overwrites=overwrites,
+                reason="setuprolesコマンドによる再セットアップ"
+            )
+            set_level_channel_id(guild.id, notify_channel.id)
+            channel_msg = f"📢 通知チャンネルを新規作成しました: {notify_channel.mention}"
+        except discord.Forbidden:
+            channel_msg = "⚠️ 通知チャンネルの作成に失敗しました（権限不足）"
+
+    # 結果レポート
+    desc = ""
+    if created_roles:
+        desc += f"✅ **新規作成したロール（{len(created_roles)}個）**\n"
+        desc += "\n".join(f"　・{r}" for r in created_roles) + "\n\n"
+    if skipped_roles:
+        desc += f"⏭️ **既に存在するロール（{len(skipped_roles)}個）**\n"
+        desc += "\n".join(f"　・{r}" for r in skipped_roles) + "\n\n"
+    desc += channel_msg
+
+    embed = discord.Embed(
+        title="🔧 セットアップ結果",
+        description=desc,
+        color=discord.Color.green() if created_roles else discord.Color.blue()
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@setuproles.error
+async def setuproles_error(interaction: discord.Interaction, error):
     if isinstance(error, discord.app_commands.MissingPermissions):
         await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
@@ -1145,6 +1255,7 @@ async def on_guild_join(guild):
                 "`/top` - ランキングTOP10\n"
                 "`/boss` - 週ボス状況確認\n"
                 "`/setchannel` - 通知チャンネル変更（管理者）\n"
+                "`/setuproles` - ロール・チャンネル再セットアップ（管理者）\n"
                 "`/userdata` - ユーザーデータ確認（管理者）\n"
                 "`/alldata` - 全データCSV出力（管理者）"
             )
