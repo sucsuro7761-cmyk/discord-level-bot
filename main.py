@@ -937,11 +937,28 @@ async def boss_spawn_task():
             await notify_channel.send(embed=embed)
 
 # =========================
-# 週ボス：2時間ごとダメージ報告（全サーバー）
+# 週ボス：ダメージ報告（0時・6時・12時・18時）
 # =========================
-@tasks.loop(hours=2)
+_boss_report_fired = {}  # { "YYYY-MM-DD_HH": True }
+
+@tasks.loop(minutes=1)
 async def boss_damage_report():
     await bot.wait_until_ready()
+
+    now = datetime.now(JST)
+    if now.hour not in [0, 6, 12, 18] or now.minute != 0:
+        return
+
+    fire_key = now.strftime("%Y-%m-%d_%H")
+    if _boss_report_fired.get(fire_key):
+        return
+    _boss_report_fired[fire_key] = True
+
+    # 古いフラグを削除
+    today = now.strftime("%Y-%m-%d")
+    for key in list(_boss_report_fired.keys()):
+        if key.split("_")[0] < today:
+            del _boss_report_fired[key]
 
     for guild in bot.guilds:
         gid = guild.id
