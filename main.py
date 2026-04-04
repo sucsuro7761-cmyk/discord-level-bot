@@ -363,7 +363,10 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("weekly_xp", 0)
 
             boost = get_boost(guild_id)
-            gain = int(10 * boost["multiplier"])
+            # ミュート中は2XP、ミュート解除（発言中）は15XP
+            is_muted = member.voice.self_mute or member.voice.mute
+            base_xp = 2 if is_muted else 15
+            gain = int(base_xp * boost["multiplier"])
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
 
@@ -384,6 +387,222 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and not after.channel:
         vc_users[ck] = False
+
+
+# =========================
+# ポモドーロタイマー
+# =========================
+POMODORO_WORK_MINUTES = 25
+POMODORO_BREAK_MINUTES = 5
+POMODORO_XP_REWARD = 50
+
+# サーバーごとのタイマー状態
+# { guild_id: PomodoroSession }
+pomodoro_sessions = {}
+
+class PomodoroSession:
+    def __init__(self, vc_channel, notify_channel, started_by):
+        self.vc_channel = vc_channel          # 対象VCチャンネル
+        self.notify_channel = notify_channel  # 通知テキストチャンネル
+        self.started_by = started_by          # 開始者
+        self.participants = set()             # 参加者ID（途中参加含む）
+        self.start_time = datetime.now(JST)
+        self.running = True
+        self.phase = "work"                   # "work" or "break"
+        self.task = None                      # asyncioタスク
+
+pomodoro_group = discord.app_commands.Group(name="pomodoro", description="ポモドーロタイマー")
+
+@pomodoro_group.command(name="start", description="ポモドーロタイマーを開始（VCにいる必要があります）")
+async def pomodoro_start(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    # すでに実行中チェック
+    if guild_id in pomodoro_sessions and pomodoro_sessions[guild_id].running:
+        await interaction.response.send_message(
+            "⚠️ すでにタイマーが実行中です！ `/pomodoro stop` で停止できます。",
+            ephemeral=True
+        )
+        return
+
+    # VCにいるかチェック
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message(
+            "⚠️ VCに参加してからコマンドを実行してください！",
+            ephemeral=True
+        )
+        return
+
+    vc_channel = interaction.user.voice.channel
+    ch_id = get_level_channel_id(guild_id)
+    notify_channel = interaction.guild.get_channel(ch_id) if ch_id else interaction.channel
+
+    # セッション作成
+    session = PomodoroSession(vc_channel, notify_channel, interaction.user)
+
+    # 開始時点のVC参加者を登録
+    for member in vc_channel.members:
+        if not member.bot:
+            session.participants.add(str(member.id))
+
+    pomodoro_sessions[guild_id] = session
+
+    await interaction.response.send_message(
+        f"✅ ポモドーロタイマーを開始しました！",
+        ephemeral=True
+    )
+
+    embed = discord.Embed(
+        title="🍅 ポモドーロタイマー開始！",
+        description=(
+            f"**対象VC:** {vc_channel.mention}\n"
+            f"**作業時間:** {POMODORO_WORK_MINUTES}分\n"
+            f"**参加者:** {len(session.participants)}人\n\n"
+            f"集中して頑張ろう！完走で **+{POMODORO_XP_REWARD}XP** 獲得！"
+        ),
+        color=discord.Color.red()
+    )
+    embed.set_footer(text=f"開始者: {interaction.user.display_name}")
+    await notify_channel.send(embed=embed)
+
+    # タイマータスクを開始
+    session.task = asyncio.create_task(run_pomodoro(guild_id, session))
+
+@pomodoro_group.command(name="stop", description="ポモドーロタイマーを手動停止")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def pomodoro_stop(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    if guild_id not in pomodoro_sessions or not pomodoro_sessions[guild_id].running:
+        await interaction.response.send_message("現在タイマーは実行されていません。", ephemeral=True)
+        return
+
+    session = pomodoro_sessions[guild_id]
+    session.running = False
+    if session.task:
+        session.task.cancel()
+    del pomodoro_sessions[guild_id]
+
+    await interaction.response.send_message("⏹️ タイマーを停止しました。", ephemeral=True)
+    await session.notify_channel.send("⏹️ **ポモドーロタイマーが手動停止されました。**")
+
+@pomodoro_group.command(name="status", description="現在のポモドーロタイマーの状態を確認")
+async def pomodoro_status(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    if guild_id not in pomodoro_sessions or not pomodoro_sessions[guild_id].running:
+        await interaction.response.send_message("現在タイマーは実行されていません。", ephemeral=True)
+        return
+
+    session = pomodoro_sessions[guild_id]
+    now = datetime.now(JST)
+    elapsed = (now - session.start_time).seconds // 60
+    work_min = POMODORO_WORK_MINUTES
+
+    if session.phase == "work":
+        remaining = max(0, work_min - elapsed)
+        phase_label = "🍅 作業中"
+    else:
+        remaining = max(0, POMODORO_BREAK_MINUTES - elapsed)
+        phase_label = "☕ 休憩中"
+
+    participants_mention = " ".join(f"<@{uid}>" for uid in session.participants)
+
+    embed = discord.Embed(
+        title="🍅 ポモドーロ タイマー状況",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="フェーズ", value=phase_label)
+    embed.add_field(name="残り時間", value=f"約{remaining}分")
+    embed.add_field(name="対象VC", value=session.vc_channel.mention, inline=False)
+    embed.add_field(name=f"参加者（{len(session.participants)}人）", value=participants_mention or "なし", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+bot.tree.add_command(pomodoro_group)
+
+async def run_pomodoro(guild_id, session):
+    """ポモドーロタイマーのメインループ"""
+    try:
+        # ===== 作業フェーズ（25分）=====
+        session.phase = "work"
+
+        # 1分ごとにVCの参加者を更新
+        work_seconds = POMODORO_WORK_MINUTES * 60
+        elapsed = 0
+        while elapsed < work_seconds:
+            await asyncio.sleep(10)
+            elapsed += 10
+            if not session.running:
+                return
+
+            # 途中参加者を追加
+            for member in session.vc_channel.members:
+                if not member.bot:
+                    session.participants.add(str(member.id))
+
+        # ===== 作業終了：完走者にXP付与 =====
+        # VCに残っているメンバーのみ対象（2人以上いること）
+        remaining_members = [m for m in session.vc_channel.members if not m.bot]
+        remaining_ids = {str(m.id) for m in remaining_members}
+        completed = session.participants & remaining_ids  # 最初から or 途中参加 かつ 残っている
+
+        reward_text = ""
+        if len(remaining_members) >= 2:
+            data = load_data(guild_id)
+            for uid in completed:
+                if uid not in data:
+                    data[uid] = {}
+                data[uid].setdefault("xp", 0)
+                data[uid].setdefault("level", 1)
+                data[uid].setdefault("weekly_xp", 0)
+                data[uid].setdefault("last_daily", "")
+                data[uid].setdefault("login_streak", 0)
+                data[uid]["xp"] += POMODORO_XP_REWARD
+                data[uid]["weekly_xp"] += POMODORO_XP_REWARD
+                reward_text += f"<@{uid}> "
+
+                member = session.vc_channel.guild.get_member(int(uid))
+                if member:
+                    await check_level_up(member, data, uid)
+
+            save_data(guild_id, data)
+        else:
+            reward_text = "（VCの人数が足りなかったためXP付与なし）"
+
+        embed = discord.Embed(
+            title="✅ ポモドーロ作業タイム終了！",
+            description=(
+                f"お疲れ様でした！\n\n"
+                f"**完走者:** {reward_text}\n"
+                f"**XP付与:** +{POMODORO_XP_REWARD}XP\n\n"
+                f"☕ 休憩タイム（{POMODORO_BREAK_MINUTES}分）を開始します！"
+            ),
+            color=discord.Color.green()
+        )
+        await session.notify_channel.send(embed=embed)
+
+        # ===== 休憩フェーズ（5分）=====
+        session.phase = "break"
+        await asyncio.sleep(POMODORO_BREAK_MINUTES * 60)
+
+        if not session.running:
+            return
+
+        embed = discord.Embed(
+            title="☕ 休憩終了！",
+            description=(
+                "休憩タイムが終わりました！\n"
+                "次のポモドーロを始めるには `/pomodoro start` を使ってください！"
+            ),
+            color=discord.Color.blue()
+        )
+        await session.notify_channel.send(embed=embed)
+
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if guild_id in pomodoro_sessions:
+            del pomodoro_sessions[guild_id]
 
 # =========================
 # /rank
