@@ -270,7 +270,17 @@ async def on_message(message):
     data[user_id].setdefault("last_daily", "")
     data[user_id].setdefault("weekly_xp", 0)
     data[user_id].setdefault("login_streak", 0)
+    data[user_id].setdefault("weekly_chat_xp", 0)
+    data[user_id].setdefault("weekly_vc_xp", 0)
+    data[user_id].setdefault("weekly_active_days", [])
+    data[user_id].setdefault("last_weekly_xp", 0)
+    data[user_id].setdefault("last_weekly_rank", 0)
     data.setdefault(LAST_DECAY_KEY, "")
+
+    # アクティブ日数を記録
+    today_jst = datetime.now(JST).strftime("%Y-%m-%d")
+    if today_jst not in data[user_id]["weekly_active_days"]:
+        data[user_id]["weekly_active_days"].append(today_jst)
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -298,6 +308,19 @@ async def on_message(message):
         data[user_id]["weekly_xp"] += bonus
         data[user_id]["last_daily"] = today
 
+        # ログインボーナスでボスにダメージ
+        boss = load_boss(guild_id)
+        if boss.get("active"):
+            boss["damage"][user_id] = boss["damage"].get(user_id, 0) + bonus
+            boss["hp"] = max(0, boss["hp"] - bonus)
+            if boss["hp"] <= 0:
+                boss["active"] = False
+                boss["cleared"] += 1
+                save_boss(guild_id, boss)
+                await handle_boss_clear(message.guild, boss)
+            else:
+                save_boss(guild_id, boss)
+
         if streak == 1:
             streak_msg = "🎁 **デイリーボーナス！**"
         elif streak < 5:
@@ -315,6 +338,7 @@ async def on_message(message):
     xp_gain = int(random.randint(5, 20) * boost["multiplier"])
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
+    data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
 
     await check_level_up(message.author, data, user_id)
     save_data(guild_id, data)
@@ -369,6 +393,7 @@ async def on_voice_state_update(member, before, after):
             gain = int(base_xp * boost["multiplier"])
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
+            data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
@@ -699,6 +724,112 @@ async def myxp(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
+# /weeklynote
+# =========================
+@bot.tree.command(name="weeklynote", description="今週の活動レポートを確認")
+async def weeklynote(interaction: discord.Interaction):
+    await interaction.response.defer()
+    guild_id = interaction.guild.id
+    user_id = str(interaction.user.id)
+    data = load_data(guild_id)
+
+    if user_id not in data:
+        await interaction.followup.send("まだデータがありません！メッセージを送ってからお試しください。")
+        return
+
+    info = data[user_id]
+
+    # 今週のXP・順位
+    weekly_xp = info.get("weekly_xp", 0)
+    sorted_users = sorted(
+        [(uid, d) for uid, d in data.items() if uid != LAST_DECAY_KEY],
+        key=lambda x: x[1].get("weekly_xp", 0),
+        reverse=True
+    )
+    current_rank = next((i+1 for i, (uid, _) in enumerate(sorted_users) if uid == user_id), 0)
+    total_users = len(sorted_users)
+
+    # 前週比
+    last_xp = info.get("last_weekly_xp", 0)
+    last_rank = info.get("last_weekly_rank", 0)
+    xp_diff = weekly_xp - last_xp
+    xp_diff_str = f"+{xp_diff}" if xp_diff >= 0 else str(xp_diff)
+
+    if last_rank == 0:
+        rank_diff_str = "（前週データなし）"
+    else:
+        rank_diff = last_rank - current_rank  # 正=上昇
+        if rank_diff > 0:
+            rank_diff_str = f"↑{rank_diff}"
+        elif rank_diff < 0:
+            rank_diff_str = f"↓{abs(rank_diff)}"
+        else:
+            rank_diff_str = "→ 変動なし"
+
+    # アクティブ日数
+    active_days = len(info.get("weekly_active_days", []))
+
+    # チャット・VC比率
+    chat_xp = info.get("weekly_chat_xp", 0)
+    vc_xp = info.get("weekly_vc_xp", 0)
+    total_activity_xp = chat_xp + vc_xp
+    if total_activity_xp > 0:
+        chat_pct = int(chat_xp / total_activity_xp * 100)
+        vc_pct = 100 - chat_pct
+    else:
+        chat_pct = vc_pct = 0
+
+    # ボスダメージ
+    boss = load_boss(guild_id)
+    boss_dmg = boss.get("damage", {}).get(user_id, 0) if boss.get("active") else 0
+    if boss.get("active") and boss_dmg > 0:
+        sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
+        boss_rank = next((i+1 for i, (uid, _) in enumerate(sorted_dmg) if uid == user_id), 0)
+        boss_str = f"{boss_dmg:,} ({boss_rank}位)"
+    elif boss.get("active"):
+        boss_str = "未参加"
+    else:
+        boss_str = "今週ボスなし"
+
+    embed = discord.Embed(
+        title="📊 週間レポート",
+        color=discord.Color.blue()
+    )
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+    embed.add_field(
+        name="👤 基本情報",
+        value=(
+            f"・週間XP: **{weekly_xp:,}**\n"
+            f"・順位: **{current_rank}位** / {total_users}人\n"
+            f"・アクティブ日数: **{active_days}日**"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="📈 前週比",
+        value=(
+            f"・XP: **{xp_diff_str}**\n"
+            f"・順位: **{rank_diff_str}**"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🎯 活動分析",
+        value=(
+            f"・チャット: **{chat_pct}%** ({chat_xp:,} XP)\n"
+            f"・VC: **{vc_pct}%** ({vc_xp:,} XP)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚔️ ボス",
+        value=f"・ダメージ: **{boss_str}**",
+        inline=False
+    )
+    embed.set_footer(text=f"集計期間: 月曜リセット ／ Lv{info.get('level', 1)}")
+    await interaction.followup.send(embed=embed)
+
+# =========================
 # /userdata（管理者用）
 # =========================
 @bot.tree.command(name="userdata", description="ユーザーのデータを確認（管理者用）")
@@ -853,9 +984,17 @@ async def weekly_ranking_task():
             )
             await notify_channel.send(embed=embed)
 
+        # 前週データを保存してリセット
+        for i, (uid, info) in enumerate(sorted_users, start=1):
+            info["last_weekly_xp"] = info.get("weekly_xp", 0)
+            info["last_weekly_rank"] = i
+
         for uid in data:
             if uid != LAST_DECAY_KEY:
                 data[uid]["weekly_xp"] = 0
+                data[uid]["weekly_chat_xp"] = 0
+                data[uid]["weekly_vc_xp"] = 0
+                data[uid]["weekly_active_days"] = []
         save_data(gid, data)
 
 # =========================
