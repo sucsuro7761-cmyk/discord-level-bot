@@ -68,6 +68,18 @@ BOSS_HP_SCALE = 1.2
 BOSS_CLEAR_ROLE = "⚔️ボス討伐者"
 
 # =========================
+# イベントボス Config
+# =========================
+EVENT_BOSS_DEFAULT_HP = 150000    # デフォルトHP（管理者が指定可能）
+EVENT_BOSS_CLEAR_ROLE = "👑BOSS VIP"
+EVENT_BOSS_CONSECUTIVE_CLEARS = 5  # 累計クリア数で発動
+EVENT_BOSS_BOOST_MULTIPLIER = 3    # 討伐後のXP倍率（デフォルト）
+EVENT_BOSS_BOOST_DAYS = 7          # ブースト日数（デフォルト）
+
+# イベントボス状態 { guild_id: bool }
+event_boss_active = {}
+
+# =========================
 # ファイルパス（サーバーごと）
 # =========================
 def data_file(guild_id):
@@ -75,6 +87,9 @@ def data_file(guild_id):
 
 def boss_file(guild_id):
     return f"{DATA_DIR}/boss_{guild_id}.json"
+
+def event_boss_file(guild_id):
+    return f"{DATA_DIR}/event_boss_{guild_id}.json"
 
 def config_file():
     return f"{DATA_DIR}/config.json"
@@ -355,6 +370,18 @@ async def on_message(message):
         else:
             save_boss(guild_id, boss)
 
+    # イベントボスへのダメージ
+    event_boss = load_event_boss(guild_id)
+    if event_boss.get("active"):
+        event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + xp_gain
+        event_boss["hp"] = max(0, event_boss["hp"] - xp_gain)
+        if event_boss["hp"] <= 0:
+            event_boss["active"] = False
+            save_event_boss(guild_id, event_boss)
+            await handle_event_boss_clear(message.guild, event_boss)
+        else:
+            save_event_boss(guild_id, event_boss)
+
     await bot.process_commands(message)
 
 # =========================
@@ -410,224 +437,20 @@ async def on_voice_state_update(member, before, after):
                 else:
                     save_boss(guild_id, boss)
 
+            # イベントボスへのダメージ
+            event_boss = load_event_boss(guild_id)
+            if event_boss.get("active"):
+                event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + gain
+                event_boss["hp"] = max(0, event_boss["hp"] - gain)
+                if event_boss["hp"] <= 0:
+                    event_boss["active"] = False
+                    save_event_boss(guild_id, event_boss)
+                    await handle_event_boss_clear(member.guild, event_boss)
+                else:
+                    save_event_boss(guild_id, event_boss)
+
     if before.channel and not after.channel:
         vc_users[ck] = False
-
-
-# =========================
-# ポモドーロタイマー
-# =========================
-POMODORO_WORK_MINUTES = 25
-POMODORO_BREAK_MINUTES = 5
-POMODORO_XP_REWARD = 50
-
-# サーバーごとのタイマー状態
-# { guild_id: PomodoroSession }
-pomodoro_sessions = {}
-
-class PomodoroSession:
-    def __init__(self, vc_channel, notify_channel, started_by):
-        self.vc_channel = vc_channel          # 対象VCチャンネル
-        self.notify_channel = notify_channel  # 通知テキストチャンネル
-        self.started_by = started_by          # 開始者
-        self.participants = set()             # 参加者ID（途中参加含む）
-        self.start_time = datetime.now(JST)
-        self.running = True
-        self.phase = "work"                   # "work" or "break"
-        self.task = None                      # asyncioタスク
-
-pomodoro_group = discord.app_commands.Group(name="pomodoro", description="ポモドーロタイマー")
-
-@pomodoro_group.command(name="start", description="ポモドーロタイマーを開始（VCにいる必要があります）")
-async def pomodoro_start(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-
-    # すでに実行中チェック
-    if guild_id in pomodoro_sessions and pomodoro_sessions[guild_id].running:
-        await interaction.response.send_message(
-            "⚠️ すでにタイマーが実行中です！ `/pomodoro stop` で停止できます。",
-            ephemeral=True
-        )
-        return
-
-    # VCにいるかチェック
-    if not interaction.user.voice or not interaction.user.voice.channel:
-        await interaction.response.send_message(
-            "⚠️ VCに参加してからコマンドを実行してください！",
-            ephemeral=True
-        )
-        return
-
-    vc_channel = interaction.user.voice.channel
-    ch_id = get_level_channel_id(guild_id)
-    notify_channel = interaction.guild.get_channel(ch_id) if ch_id else interaction.channel
-
-    # セッション作成
-    session = PomodoroSession(vc_channel, notify_channel, interaction.user)
-
-    # 開始時点のVC参加者を登録
-    for member in vc_channel.members:
-        if not member.bot:
-            session.participants.add(str(member.id))
-
-    pomodoro_sessions[guild_id] = session
-
-    await interaction.response.send_message(
-        f"✅ ポモドーロタイマーを開始しました！",
-        ephemeral=True
-    )
-
-    embed = discord.Embed(
-        title="🍅 ポモドーロタイマー開始！",
-        description=(
-            f"**対象VC:** {vc_channel.mention}\n"
-            f"**作業時間:** {POMODORO_WORK_MINUTES}分\n"
-            f"**参加者:** {len(session.participants)}人\n\n"
-            f"集中して頑張ろう！完走で **+{POMODORO_XP_REWARD}XP** 獲得！"
-        ),
-        color=discord.Color.red()
-    )
-    embed.set_footer(text=f"開始者: {interaction.user.display_name}")
-    await notify_channel.send(embed=embed)
-
-    # タイマータスクを開始
-    session.task = asyncio.create_task(run_pomodoro(guild_id, session))
-
-@pomodoro_group.command(name="stop", description="ポモドーロタイマーを手動停止")
-@discord.app_commands.checks.has_permissions(administrator=True)
-async def pomodoro_stop(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-
-    if guild_id not in pomodoro_sessions or not pomodoro_sessions[guild_id].running:
-        await interaction.response.send_message("現在タイマーは実行されていません。", ephemeral=True)
-        return
-
-    session = pomodoro_sessions[guild_id]
-    session.running = False
-    if session.task:
-        session.task.cancel()
-    del pomodoro_sessions[guild_id]
-
-    await interaction.response.send_message("⏹️ タイマーを停止しました。", ephemeral=True)
-    await session.notify_channel.send("⏹️ **ポモドーロタイマーが手動停止されました。**")
-
-@pomodoro_group.command(name="status", description="現在のポモドーロタイマーの状態を確認")
-async def pomodoro_status(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-
-    if guild_id not in pomodoro_sessions or not pomodoro_sessions[guild_id].running:
-        await interaction.response.send_message("現在タイマーは実行されていません。", ephemeral=True)
-        return
-
-    session = pomodoro_sessions[guild_id]
-    now = datetime.now(JST)
-    elapsed = (now - session.start_time).seconds // 60
-    work_min = POMODORO_WORK_MINUTES
-
-    if session.phase == "work":
-        remaining = max(0, work_min - elapsed)
-        phase_label = "🍅 作業中"
-    else:
-        remaining = max(0, POMODORO_BREAK_MINUTES - elapsed)
-        phase_label = "☕ 休憩中"
-
-    participants_mention = " ".join(f"<@{uid}>" for uid in session.participants)
-
-    embed = discord.Embed(
-        title="🍅 ポモドーロ タイマー状況",
-        color=discord.Color.orange()
-    )
-    embed.add_field(name="フェーズ", value=phase_label)
-    embed.add_field(name="残り時間", value=f"約{remaining}分")
-    embed.add_field(name="対象VC", value=session.vc_channel.mention, inline=False)
-    embed.add_field(name=f"参加者（{len(session.participants)}人）", value=participants_mention or "なし", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-bot.tree.add_command(pomodoro_group)
-
-async def run_pomodoro(guild_id, session):
-    """ポモドーロタイマーのメインループ"""
-    try:
-        # ===== 作業フェーズ（25分）=====
-        session.phase = "work"
-
-        # 1分ごとにVCの参加者を更新
-        work_seconds = POMODORO_WORK_MINUTES * 60
-        elapsed = 0
-        while elapsed < work_seconds:
-            await asyncio.sleep(10)
-            elapsed += 10
-            if not session.running:
-                return
-
-            # 途中参加者を追加
-            for member in session.vc_channel.members:
-                if not member.bot:
-                    session.participants.add(str(member.id))
-
-        # ===== 作業終了：完走者にXP付与 =====
-        # VCに残っているメンバーのみ対象（2人以上いること）
-        remaining_members = [m for m in session.vc_channel.members if not m.bot]
-        remaining_ids = {str(m.id) for m in remaining_members}
-        completed = session.participants & remaining_ids  # 最初から or 途中参加 かつ 残っている
-
-        reward_text = ""
-        if len(remaining_members) >= 2:
-            data = load_data(guild_id)
-            for uid in completed:
-                if uid not in data:
-                    data[uid] = {}
-                data[uid].setdefault("xp", 0)
-                data[uid].setdefault("level", 1)
-                data[uid].setdefault("weekly_xp", 0)
-                data[uid].setdefault("last_daily", "")
-                data[uid].setdefault("login_streak", 0)
-                data[uid]["xp"] += POMODORO_XP_REWARD
-                data[uid]["weekly_xp"] += POMODORO_XP_REWARD
-                reward_text += f"<@{uid}> "
-
-                member = session.vc_channel.guild.get_member(int(uid))
-                if member:
-                    await check_level_up(member, data, uid)
-
-            save_data(guild_id, data)
-        else:
-            reward_text = "（VCの人数が足りなかったためXP付与なし）"
-
-        embed = discord.Embed(
-            title="✅ ポモドーロ作業タイム終了！",
-            description=(
-                f"お疲れ様でした！\n\n"
-                f"**完走者:** {reward_text}\n"
-                f"**XP付与:** +{POMODORO_XP_REWARD}XP\n\n"
-                f"☕ 休憩タイム（{POMODORO_BREAK_MINUTES}分）を開始します！"
-            ),
-            color=discord.Color.green()
-        )
-        await session.notify_channel.send(embed=embed)
-
-        # ===== 休憩フェーズ（5分）=====
-        session.phase = "break"
-        await asyncio.sleep(POMODORO_BREAK_MINUTES * 60)
-
-        if not session.running:
-            return
-
-        embed = discord.Embed(
-            title="☕ 休憩終了！",
-            description=(
-                "休憩タイムが終わりました！\n"
-                "次のポモドーロを始めるには `/pomodoro start` を使ってください！"
-            ),
-            color=discord.Color.blue()
-        )
-        await session.notify_channel.send(embed=embed)
-
-    except asyncio.CancelledError:
-        pass
-    finally:
-        if guild_id in pomodoro_sessions:
-            del pomodoro_sessions[guild_id]
 
 # =========================
 # /rank
@@ -1149,6 +972,174 @@ async def decay_task():
             )
             await notify_channel.send(embed=embed)
 
+
+# =========================
+# イベントボス read/write
+# =========================
+def load_event_boss(guild_id):
+    path = event_boss_file(guild_id)
+    if not os.path.exists(path):
+        return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
+    with open(path, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
+
+def save_event_boss(guild_id, boss):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(event_boss_file(guild_id), "w") as f:
+        json.dump(boss, f, indent=4)
+
+# =========================
+# イベントボス：自動発動チェック（通常ボスクリア時に呼ぶ）
+# =========================
+async def check_event_boss_trigger(guild, consecutive_clears):
+    gid = guild.id
+    event_boss = load_event_boss(gid)
+
+    # すでにイベントボス発動中なら無視
+    if event_boss.get("active"):
+        return
+
+    # 連続クリア数を更新
+    event_boss["consecutive_clears"] = consecutive_clears
+    save_event_boss(gid, event_boss)
+
+    # トリガー条件チェック（累計クリア数が5の倍数に達したら発動）
+    if consecutive_clears > 0 and consecutive_clears % EVENT_BOSS_CONSECUTIVE_CLEARS == 0:
+        await spawn_event_boss(guild, event_boss.get("name", "大魔王"))
+
+async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplier=None):
+    gid = guild.id
+    ch_id = get_level_channel_id(gid)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
+
+    event_hp = hp if hp else EVENT_BOSS_DEFAULT_HP
+    boost_days = days if days else EVENT_BOSS_BOOST_DAYS
+    boost_multi = boost_multiplier if boost_multiplier else EVENT_BOSS_BOOST_MULTIPLIER
+
+    event_boss = {
+        "active": True,
+        "hp": event_hp,
+        "max_hp": event_hp,
+        "damage": {},
+        "name": boss_name,
+        "boost_days": boost_days,
+        "boost_multiplier": boost_multi,
+        "consecutive_clears": EVENT_BOSS_CONSECUTIVE_CLEARS
+    }
+    save_event_boss(gid, event_boss)
+    event_boss_active[gid] = True
+
+    # 限定ロールを作成（なければ）
+    role = discord.utils.get(guild.roles, name=EVENT_BOSS_CLEAR_ROLE)
+    if not role:
+        try:
+            role = await guild.create_role(
+                name=EVENT_BOSS_CLEAR_ROLE,
+                color=discord.Color.from_rgb(255, 215, 0),
+                reason="イベントボス自動生成"
+            )
+        except discord.Forbidden:
+            pass
+
+    if notify_channel:
+        embed = discord.Embed(
+            title=f"🚨 イベントボス出現！【{boss_name}】",
+            description=(
+                f"通常ボスを**{EVENT_BOSS_CONSECUTIVE_CLEARS}回クリア**したことで\n"
+                f"伝説の強敵が目覚めた！\n\n"
+                f"メッセージを送るだけで自動攻撃！\n"
+                f"討伐成功で限定ロールとXP{boost_multi}倍ブーストをGET！"
+            ),
+            color=discord.Color.from_rgb(255, 100, 0)
+        )
+        embed.add_field(name="❤️ HP", value=f"{event_hp:,} / {event_hp:,}")
+        embed.add_field(name="📅 開催期間", value=f"{boost_days}日間")
+        embed.add_field(name="🎁 討伐報酬", value=f"`{EVENT_BOSS_CLEAR_ROLE}` ロール\nXP **{boost_multi}倍**（{boost_days}日間）", inline=False)
+        embed.set_footer(text="全員で力を合わせて倒せ！")
+        await notify_channel.send("@everyone", embed=embed)
+
+# =========================
+# イベントボス：クリア処理
+# =========================
+async def handle_event_boss_clear(guild, event_boss):
+    gid = guild.id
+    ch_id = get_level_channel_id(gid)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
+
+    # 討伐者全員に限定ロール付与
+    role = discord.utils.get(guild.roles, name=EVENT_BOSS_CLEAR_ROLE)
+    for uid, dmg in event_boss["damage"].items():
+        if dmg <= 0:
+            continue
+        member = guild.get_member(int(uid))
+        if member and role:
+            await member.add_roles(role)
+
+    # MVPランキング
+    sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
+    mvp_text = ""
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
+        mvp_text += f"{medals[i]} <@{uid}> - {dmg:,}ダメージ\n"
+
+    boss_name = event_boss.get("name", "大魔王")
+
+    boost_days = event_boss.get("boost_days", EVENT_BOSS_BOOST_DAYS)
+    boost_multi = event_boss.get("boost_multiplier", EVENT_BOSS_BOOST_MULTIPLIER)
+
+    # MVP（1位）への特別称号メッセージ
+    mvp_uid = sorted_dmg[0][0] if sorted_dmg else None
+
+    if notify_channel:
+        embed = discord.Embed(
+            title=f"🏆 イベントボス【{boss_name}】討伐成功！！",
+            description=(
+                f"伝説の強敵を全員で打ち倒した！\n\n"
+                f"**MVPランキング**\n{mvp_text}"
+            ),
+            color=discord.Color.gold()
+        )
+        embed.add_field(
+            name="🎁 報酬",
+            value=(
+                f"`{EVENT_BOSS_CLEAR_ROLE}` ロール付与！\n"
+                f"🔥 XP **{boost_multi}倍ブースト** {boost_days}日間！"
+            )
+        )
+        await notify_channel.send(embed=embed)
+
+        # MVPへの特別称号メッセージ
+        if mvp_uid:
+            mvp_dmg = sorted_dmg[0][1]
+            await notify_channel.send(
+                f"👑 **【伝説の討伐者】**\n"
+                f"<@{mvp_uid}> は今回のイベントボス討伐において **{mvp_dmg:,}ダメージ** を叩き出し、\n"
+                f"サーバー最強の討伐者として歴史に名を刻んだ！"
+            )
+
+    # XPブーストを設定
+    asyncio.create_task(event_boss_boost(guild, notify_channel, boost_multi, boost_days))
+
+    # イベントボスをリセット・連続クリア数もリセット
+    reset_event = load_event_boss(gid)
+    reset_event["active"] = False
+    reset_event["consecutive_clears"] = 0
+    save_event_boss(gid, reset_event)
+    event_boss_active[gid] = False
+
+async def event_boss_boost(guild, notify_channel, multiplier=None, days=None):
+    gid = guild.id
+    m = multiplier if multiplier else EVENT_BOSS_BOOST_MULTIPLIER
+    d = days if days else EVENT_BOSS_BOOST_DAYS
+    set_boss_boost(gid, m)
+    await asyncio.sleep(d * 24 * 3600)
+    set_boss_boost(gid, 1)
+    if notify_channel:
+        await notify_channel.send(f"⏱ **イベント討伐ブースト終了！** XPが通常に戻りました。")
+
 # =========================
 # 週ボス：討伐成功処理
 # =========================
@@ -1184,6 +1175,9 @@ async def handle_boss_clear(guild, boss):
         await notify_channel.send(embed=embed)
 
     asyncio.create_task(boss_clear_boost(guild, notify_channel))
+
+    # イベントボストリガーチェック
+    await check_event_boss_trigger(guild, boss.get("cleared", 0))
 
 # =========================
 # 週ボス：討伐ブースト
@@ -1524,6 +1518,82 @@ async def boss_status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
+# /eventboss コマンド群
+# =========================
+eventboss_group = discord.app_commands.Group(name="eventboss", description="イベントボス管理")
+
+@eventboss_group.command(name="start", description="イベントボスを手動で出現させる（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def eventboss_start(
+    interaction: discord.Interaction,
+    name: str = "大魔王",
+    hp: int = 150000,
+    days: int = 7,
+    boost: int = 3
+):
+    gid = interaction.guild.id
+    event_boss = load_event_boss(gid)
+    if event_boss.get("active"):
+        await interaction.response.send_message("⚠️ すでにイベントボスが出現中です！", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"✅ イベントボス【{name}】を召喚します！\nHP: {hp:,} / 期間: {days}日 / ブースト: {boost}倍",
+        ephemeral=True
+    )
+    await spawn_event_boss(interaction.guild, name, hp=hp, days=days, boost_multiplier=boost)
+
+@eventboss_group.command(name="status", description="イベントボスの状況を確認")
+async def eventboss_status(interaction: discord.Interaction):
+    event_boss = load_event_boss(interaction.guild.id)
+    if not event_boss.get("active"):
+        clears = event_boss.get("consecutive_clears", 0)
+        await interaction.response.send_message(
+            f"現在イベントボスは出現していません。\n"
+            f"通常ボス累計クリア数: **{clears}回** / 発動条件: **{EVENT_BOSS_CONSECUTIVE_CLEARS}回**",
+            ephemeral=True
+        )
+        return
+
+    max_hp = event_boss.get("max_hp", 1)
+    current_hp = event_boss.get("hp", 0)
+    progress = (max_hp - current_hp) / max_hp
+    filled = int(20 * progress)
+    bar = "█" * filled + "░" * (20 - filled)
+    percent = int(progress * 100)
+
+    user_id = str(interaction.user.id)
+    my_dmg = event_boss["damage"].get(user_id, 0)
+
+    sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
+    top_text = ""
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
+        top_text += f"{medals[i]} <@{uid}> - {dmg:,}ダメージ\n"
+    if not top_text:
+        top_text = "まだ誰も攻撃していません！"
+
+    boss_name = event_boss.get("name", "大魔王")
+    embed = discord.Embed(
+        title=f"🚨 イベントボス【{boss_name}】状況",
+        color=discord.Color.from_rgb(255, 100, 0)
+    )
+    embed.add_field(name="❤️ ボスHP", value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}", inline=False)
+    embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
+    embed.add_field(name="⚔️ あなたのダメージ", value=f"{my_dmg:,}ダメージ", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@eventboss_group.command(name="setname", description="次のイベントボスの名前を設定（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def eventboss_setname(interaction: discord.Interaction, name: str):
+    gid = interaction.guild.id
+    event_boss = load_event_boss(gid)
+    event_boss["name"] = name
+    save_event_boss(gid, event_boss)
+    await interaction.response.send_message(f"✅ 次のイベントボス名を **{name}** に設定しました！", ephemeral=True)
+
+bot.tree.add_command(eventboss_group)
+
+# =========================
 # サーバー参加時：ロール＆チャンネル自動作成
 # =========================
 @bot.event
@@ -1542,6 +1612,7 @@ async def on_guild_join(guild):
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
         {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
         {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
+        {"name": "👑BOSS VIP",   "color": discord.Color.from_rgb(255, 215,   0)},  # イベント限定
     ]
 
     created_roles = []
