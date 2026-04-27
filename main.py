@@ -922,58 +922,6 @@ async def weekly_mid_announcement():
             await notify_channel.send(embed=embed)
 
 # =========================
-# 3ヶ月レベル減衰（全サーバー）
-# =========================
-@tasks.loop(hours=24)
-async def decay_task():
-    for guild in bot.guilds:
-        gid = guild.id
-        data = load_data(gid)
-        if not data:
-            continue
-
-        now = datetime.now(timezone.utc)
-        last_str = data.get(LAST_DECAY_KEY, "")
-
-        if not last_str:
-            data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
-            save_data(gid, data)
-            continue
-
-        last_dt = datetime.strptime(last_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        if (now - last_dt).days < 90:
-            continue
-
-        ch_id = get_level_channel_id(gid)
-        notify_channel = guild.get_channel(ch_id) if ch_id else None
-
-        results = ""
-        for user_id, info in data.items():
-            if user_id == LAST_DECAY_KEY:
-                continue
-            level = info.get("level", 1)
-            decay = int(level * DECAY_PERCENT)
-            new_level = max(1, level - decay)
-            info["level"] = new_level
-            info["xp"] = 0
-            member = guild.get_member(int(user_id))
-            if member:
-                await update_rank_role(member, new_level)
-            results += f"<@{user_id}> Lv{level} → Lv{new_level}\n"
-
-        data[LAST_DECAY_KEY] = now.strftime("%Y-%m-%d")
-        save_data(gid, data)
-
-        if notify_channel and results:
-            embed = discord.Embed(
-                title="⚔ レベル減衰が発生しました",
-                description=results,
-                color=discord.Color.red()
-            )
-            await notify_channel.send(embed=embed)
-
-
-# =========================
 # イベントボス read/write
 # =========================
 def load_event_boss(guild_id):
