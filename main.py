@@ -416,7 +416,7 @@ async def on_voice_state_update(member, before, after):
             boost = get_boost(guild_id)
             # ミュート中は2XP、ミュート解除（発言中）は15XP
             is_muted = member.voice.self_mute or member.voice.mute
-            base_xp = 2 if is_muted else 15
+            base_xp = 3 if is_muted else 15
             gain = int(base_xp * boost["multiplier"])
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
