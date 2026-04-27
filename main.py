@@ -1285,7 +1285,7 @@ async def boss_spawn_task():
 
             embed.add_field(name="⚔️ 攻撃方法", value="メッセージ送信 or VC参加で自動攻撃！")
             embed.add_field(name="🎁 討伐報酬", value="次のボス出現まで XP 2倍ブースト ＋ 特別ロール")
-            embed.set_footer(text="2時間ごとにダメージ報告あり")
+            embed.set_footer(text="6時間ごとにダメージ報告あり")
             await notify_channel.send(embed=embed)
 
 # =========================
