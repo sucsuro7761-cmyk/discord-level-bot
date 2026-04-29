@@ -18,87 +18,71 @@ import pytz
 # =========================
 DECAY_PERCENT = 0.05
 LAST_DECAY_KEY = "last_decay"
+DATA_DIR = "/data"
+JST = pytz.timezone("Asia/Tokyo")
 # =========================
 # Coin / Shop Config
 # =========================
 COIN_DAILY_CAP = 1500
-CHEST_CHANCE = 0.01
-CHEST_COOLDOWN_SECONDS = 60 * 60
-DAILY_MISSION_XP = 100
-DAILY_MISSION_REWARD = 200
-WEEKLY_ACTIVE_XP_TARGET = 1000
-WEEKLY_ACTIVE_XP_REWARD = 500
-WEEKLY_RANK_REWARDS = {1: 3000, 2: 2000, 3: 1000}
-LEVEL_UP_COIN_MIN = 100
-LEVEL_UP_COIN_MAX = 500
-BOSS_COIN_RATE = 0.1
-INVITE_REWARD_COINS = 500
-MAX_XP_MULTIPLIER = 3.0
-MAX_DAMAGE_MULTIPLIER = 2.0
-
-invite_cache = {}
 
 SHOP_ITEMS = {
     "xp_small": {
-        "name": "XP Boost Small",
+        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u5c0f\uff09",
         "price": 500,
-        "description": "XP x1.5 / 30 minutes",
+        "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 1.5,
         "duration": 30 * 60,
     },
     "xp_medium": {
-        "name": "XP Boost Medium",
+        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u4e2d\uff09",
         "price": 1200,
-        "description": "XP x2.0 / 30 minutes",
+        "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 2.0,
         "duration": 30 * 60,
     },
     "boss_ct_reduce": {
-        "name": "Boss Cooldown Reduce",
+        "name": "\u30af\u30fc\u30eb\u30c0\u30a6\u30f3\u77ed\u7e2e",
         "price": 800,
-        "description": "Boss attack cooldown x0.8 / 30 minutes",
+        "description": "\u30dc\u30b9\u653b\u6483\u306e\u30af\u30fc\u30eb\u30c0\u30a6\u30f3\u304c20%\u77ed\u7e2e\u3055\u308c\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "boss_cooldown_multiplier",
         "value": 0.8,
         "duration": 30 * 60,
     },
     "daily_boost": {
-        "name": "Daily Reward Boost",
+        "name": "\u30c7\u30a4\u30ea\u30fc\u5f37\u5316",
         "price": 700,
-        "description": "Daily reward x1.5 / 24 hours",
+        "description": "\u30c7\u30a4\u30ea\u30fc\u5831\u916c\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0824\u6642\u9593\uff09",
         "buff_type": "daily_multiplier",
         "value": 1.5,
         "duration": 24 * 60 * 60,
     },
     "attack_up": {
-        "name": "Attack Up",
+        "name": "\u653b\u6483\u529b\u30a2\u30c3\u30d7",
         "price": 600,
-        "description": "Damage x1.2 / 15 minutes",
+        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
         "buff_type": "damage_multiplier",
         "value": 1.2,
         "duration": 15 * 60,
     },
     "crit_up": {
-        "name": "Critical Up",
+        "name": "\u30af\u30ea\u30c6\u30a3\u30ab\u30eb\u5f37\u5316",
         "price": 800,
-        "description": "Critical chance +20% / 15 minutes",
+        "description": "\u30af\u30ea\u30c6\u30a3\u30ab\u30eb\u7387\u304c20%\u4e0a\u304c\u308a\u307e\u3059\uff0815\u5206\uff09",
         "buff_type": "crit_bonus",
         "value": 0.20,
         "duration": 15 * 60,
     },
     "boss_slayer": {
-        "name": "Boss Slayer",
+        "name": "\u30dc\u30b9\u7279\u52b9",
         "price": 1000,
-        "description": "Boss damage x1.3 / 15 minutes",
+        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.3\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
         "buff_type": "boss_damage_multiplier",
         "value": 1.3,
         "duration": 15 * 60,
     },
 }
-DATA_DIR = "/data"
-JST = pytz.timezone("Asia/Tokyo")
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -226,9 +210,6 @@ def save_data(guild_id, data):
 def now_ts():
     return int(time.time())
 
-def today_jst_str():
-    return datetime.now(JST).strftime("%Y-%m-%d")
-
 def ensure_user_data(data, user_id):
     if user_id not in data:
         data[user_id] = {}
@@ -238,58 +219,17 @@ def ensure_user_data(data, user_id):
     info.setdefault("level", 1)
     info.setdefault("last_daily", "")
     info.setdefault("weekly_xp", 0)
+    info.setdefault("login_streak", 0)
     info.setdefault("weekly_chat_xp", 0)
     info.setdefault("weekly_vc_xp", 0)
     info.setdefault("weekly_active_days", [])
     info.setdefault("last_weekly_xp", 0)
     info.setdefault("last_weekly_rank", 0)
-    info.setdefault("login_streak", 0)
     info.setdefault("coins", 0)
-    info.setdefault("coin_daily_date", today_jst_str())
-    info.setdefault("coin_daily_earned", 0)
-    info.setdefault("coin_total_earned", 0)
-    info.setdefault("coin_total_spent", 0)
-    info.setdefault("coin_logs", [])
     info.setdefault("buffs", {})
-    info.setdefault("last_chest_at", 0)
-    info.setdefault("daily_mission_date", today_jst_str())
-    info.setdefault("daily_mission_xp", 0)
-    info.setdefault("daily_mission_claimed", False)
+    info.setdefault("coin_daily_earned", 0)
+    info.setdefault("coin_total_spent", 0)
     return info
-
-def reset_daily_coin_counter_if_needed(info):
-    today = today_jst_str()
-    if info.get("coin_daily_date") != today:
-        info["coin_daily_date"] = today
-        info["coin_daily_earned"] = 0
-
-def add_coin_log(info, amount, reason):
-    logs = info.setdefault("coin_logs", [])
-    logs.append({
-        "time": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
-        "amount": int(amount),
-        "reason": reason,
-    })
-    del logs[:-20]
-
-def add_coins(data, user_id, amount, reason="reward", apply_daily_cap=True):
-    info = ensure_user_data(data, user_id)
-    amount = int(amount)
-    if amount <= 0:
-        return 0
-
-    reset_daily_coin_counter_if_needed(info)
-    if apply_daily_cap:
-        remaining = max(0, COIN_DAILY_CAP - info.get("coin_daily_earned", 0))
-        amount = min(amount, remaining)
-        if amount <= 0:
-            return 0
-        info["coin_daily_earned"] += amount
-
-    info["coins"] = info.get("coins", 0) + amount
-    info["coin_total_earned"] = info.get("coin_total_earned", 0) + amount
-    add_coin_log(info, amount, reason)
-    return amount
 
 def spend_coins(data, user_id, amount, reason="spend"):
     info = ensure_user_data(data, user_id)
@@ -299,7 +239,6 @@ def spend_coins(data, user_id, amount, reason="spend"):
 
     info["coins"] -= amount
     info["coin_total_spent"] = info.get("coin_total_spent", 0) + amount
-    add_coin_log(info, -amount, reason)
     return True
 
 def cleanup_expired_buffs(info):
@@ -317,63 +256,11 @@ def add_timed_buff(info, buff_type, value, duration_seconds, item_id):
     expires_at = current + int(duration_seconds)
     if old and old.get("expires_at", 0) > current:
         expires_at = max(old["expires_at"], current) + int(duration_seconds)
-    buffs[buff_type] = {"value": value, "expires_at": expires_at, "item_id": item_id}
-
-def get_buff_value(info, buff_type, default):
-    cleanup_expired_buffs(info)
-    buff = info.get("buffs", {}).get(buff_type)
-    if not buff:
-        return default
-    return buff.get("value", default)
-
-def get_user_xp_multiplier(info):
-    return min(float(get_buff_value(info, "xp_multiplier", 1.0)), MAX_XP_MULTIPLIER)
-
-def get_daily_multiplier(info):
-    return min(float(get_buff_value(info, "daily_multiplier", 1.0)), 2.0)
-
-def get_damage_multiplier(info, boss_damage=False):
-    mult = float(get_buff_value(info, "damage_multiplier", 1.0))
-    if boss_damage:
-        mult *= float(get_buff_value(info, "boss_damage_multiplier", 1.0))
-    return min(mult, MAX_DAMAGE_MULTIPLIER)
-
-def get_boss_cooldown_multiplier(info):
-    return float(get_buff_value(info, "boss_cooldown_multiplier", 1.0))
-
-def roll_critical(info):
-    crit_chance = 0.05 + float(get_buff_value(info, "crit_bonus", 0.0))
-    return random.random() < min(crit_chance, 0.50)
-
-def reset_daily_mission_if_needed(info):
-    today = today_jst_str()
-    if info.get("daily_mission_date") != today:
-        info["daily_mission_date"] = today
-        info["daily_mission_xp"] = 0
-        info["daily_mission_claimed"] = False
-
-async def add_xp_and_daily_mission_reward(message, data, user_id, xp_gain):
-    info = ensure_user_data(data, user_id)
-    reset_daily_mission_if_needed(info)
-    info["daily_mission_xp"] += int(xp_gain)
-    if not info.get("daily_mission_claimed", False) and info["daily_mission_xp"] >= DAILY_MISSION_XP:
-        gained = add_coins(data, user_id, DAILY_MISSION_REWARD, "daily_mission")
-        info["daily_mission_claimed"] = True
-        if gained > 0:
-            await message.channel.send(f"{message.author.mention} daily mission cleared! +{gained} coins")
-
-async def try_random_chest(message, data, user_id):
-    info = ensure_user_data(data, user_id)
-    current = now_ts()
-    if current - info.get("last_chest_at", 0) < CHEST_COOLDOWN_SECONDS:
-        return
-    if random.random() > CHEST_CHANCE:
-        return
-    reward = random.randint(300, 1000)
-    gained = add_coins(data, user_id, reward, "random_chest")
-    info["last_chest_at"] = current
-    if gained > 0:
-        await message.channel.send(f"{message.author.mention} found a treasure chest! +{gained} coins")
+    buffs[buff_type] = {
+        "value": value,
+        "expires_at": expires_at,
+        "item_id": item_id,
+    }
 
 # =========================
 # Boss read/write（サーバーごと）
@@ -478,10 +365,6 @@ async def check_level_up(member, data, user_id):
         data[user_id]["xp"] -= required_xp
         data[user_id]["level"] += 1
         new_level = data[user_id]["level"]
-        coin_reward = random.randint(LEVEL_UP_COIN_MIN, LEVEL_UP_COIN_MAX)
-        gained_coins = add_coins(data, user_id, coin_reward, "level_up")
-        if notify_channel and gained_coins > 0:
-            await notify_channel.send(f"{member.mention} level up reward: +{gained_coins} coins")
 
         await update_rank_role(member, new_level)
 
@@ -514,9 +397,8 @@ async def on_message(message):
     cooldowns[ck] = current_time
 
     data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
-    data.setdefault(LAST_DECAY_KEY, "")
-
+    if user_id not in data:
+        data[user_id] = {}
 
     data[user_id].setdefault("xp", 0)
     data[user_id].setdefault("level", 1)
@@ -557,9 +439,6 @@ async def on_message(message):
         else:
             bonus = 1000
 
-        bonus = int(bonus * get_daily_multiplier(info))
-        streak_coins = 100 + (streak * 20)
-        add_coins(data, user_id, streak_coins, "login_streak")
         data[user_id]["xp"] += bonus
         data[user_id]["weekly_xp"] += bonus
         data[user_id]["last_daily"] = today
@@ -591,23 +470,18 @@ async def on_message(message):
         )
 
     boost = get_boost(guild_id)
-    xp_gain = int(random.randint(5, 20) * boost["multiplier"] * get_user_xp_multiplier(info))
+    xp_gain = int(random.randint(5, 20) * boost["multiplier"])
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
     data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
-    await add_xp_and_daily_mission_reward(message, data, user_id, xp_gain)
-    await try_random_chest(message, data, user_id)
 
     await check_level_up(message.author, data, user_id)
     save_data(guild_id, data)
-    boss_damage = int(xp_gain * get_damage_multiplier(info, boss_damage=True))
-    if roll_critical(info):
-        boss_damage *= 2
 
     boss = load_boss(guild_id)
     if boss.get("active"):
-        boss["damage"][user_id] = boss["damage"].get(user_id, 0) + boss_damage
-        boss["hp"] = max(0, boss["hp"] - boss_damage)
+        boss["damage"][user_id] = boss["damage"].get(user_id, 0) + xp_gain
+        boss["hp"] = max(0, boss["hp"] - xp_gain)
         if boss["hp"] <= 0:
             boss["active"] = False
             boss["cleared"] += 1
@@ -619,8 +493,8 @@ async def on_message(message):
     # イベントボスへのダメージ
     event_boss = load_event_boss(guild_id)
     if event_boss.get("active"):
-        event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + boss_damage
-        event_boss["hp"] = max(0, event_boss["hp"] - boss_damage)
+        event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + xp_gain
+        event_boss["hp"] = max(0, event_boss["hp"] - xp_gain)
         if event_boss["hp"] <= 0:
             event_boss["active"] = False
             save_event_boss(guild_id, event_boss)
@@ -658,33 +532,23 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("level", 1)
             data[user_id].setdefault("last_daily", "")
             data[user_id].setdefault("weekly_xp", 0)
-            info = ensure_user_data(data, user_id)
 
             boost = get_boost(guild_id)
             # ミュート中は2XP、ミュート解除（発言中）は15XP
             is_muted = member.voice.self_mute or member.voice.mute
             base_xp = 3 if is_muted else 15
-            gain = int(base_xp * boost["multiplier"] * get_user_xp_multiplier(info))
+            gain = int(base_xp * boost["multiplier"])
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
             data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
-            reset_daily_mission_if_needed(info)
-            info["daily_mission_xp"] += gain
-            if not info.get("daily_mission_claimed", False) and info["daily_mission_xp"] >= DAILY_MISSION_XP:
-                add_coins(data, user_id, DAILY_MISSION_REWARD, "daily_mission")
-                info["daily_mission_claimed"] = True
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
 
-            boss_damage = int(gain * get_damage_multiplier(info, boss_damage=True))
-            if roll_critical(info):
-                boss_damage *= 2
-
             boss = load_boss(guild_id)
             if boss.get("active"):
-                boss["damage"][user_id] = boss["damage"].get(user_id, 0) + boss_damage
-                boss["hp"] = max(0, boss["hp"] - boss_damage)
+                boss["damage"][user_id] = boss["damage"].get(user_id, 0) + gain
+                boss["hp"] = max(0, boss["hp"] - gain)
                 if boss["hp"] <= 0:
                     boss["active"] = False
                     boss["cleared"] += 1
@@ -696,8 +560,8 @@ async def on_voice_state_update(member, before, after):
             # イベントボスへのダメージ
             event_boss = load_event_boss(guild_id)
             if event_boss.get("active"):
-                event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + boss_damage
-                event_boss["hp"] = max(0, event_boss["hp"] - boss_damage)
+                event_boss["damage"][user_id] = event_boss["damage"].get(user_id, 0) + gain
+                event_boss["hp"] = max(0, event_boss["hp"] - gain)
                 if event_boss["hp"] <= 0:
                     event_boss["active"] = False
                     save_event_boss(guild_id, event_boss)
@@ -708,24 +572,23 @@ async def on_voice_state_update(member, before, after):
     if before.channel and not after.channel:
         vc_users[ck] = False
 
-# =========================
-# /rank
+
 # =========================
 # /coins /buffs /shop /buy
 # =========================
-@bot.tree.command(name="coins", description="Check your coins")
+@bot.tree.command(name="coins", description="\u6240\u6301\u30b3\u30a4\u30f3\u3092\u78ba\u8a8d\u3057\u307e\u3059")
 async def coins(interaction: discord.Interaction):
     data = load_data(interaction.guild.id)
     user_id = str(interaction.user.id)
     info = ensure_user_data(data, user_id)
     save_data(interaction.guild.id, data)
 
-    embed = discord.Embed(title="Coins", color=discord.Color.gold())
-    embed.add_field(name="Balance", value=f"{info.get('coins', 0):,} coins", inline=False)
-    embed.add_field(name="Earned today", value=f"{info.get('coin_daily_earned', 0):,} / {COIN_DAILY_CAP:,}", inline=False)
+    embed = discord.Embed(title="\U0001f4b0 \u6240\u6301\u30b3\u30a4\u30f3", color=discord.Color.gold())
+    embed.add_field(name="\u73fe\u5728\u306e\u6240\u6301\u30b3\u30a4\u30f3", value=f"{info.get('coins', 0):,}\u30b3\u30a4\u30f3", inline=False)
+    embed.add_field(name="\u4eca\u65e5\u306e\u7372\u5f97\u91cf", value=f"{info.get('coin_daily_earned', 0):,} / {COIN_DAILY_CAP:,}\u30b3\u30a4\u30f3", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="buffs", description="Check active item effects")
+@bot.tree.command(name="buffs", description="\u6709\u52b9\u306a\u30a2\u30a4\u30c6\u30e0\u52b9\u679c\u3092\u78ba\u8a8d\u3057\u307e\u3059")
 async def buffs(interaction: discord.Interaction):
     data = load_data(interaction.guild.id)
     user_id = str(interaction.user.id)
@@ -734,7 +597,7 @@ async def buffs(interaction: discord.Interaction):
     save_data(interaction.guild.id, data)
 
     if not info.get("buffs"):
-        await interaction.response.send_message("No active buffs.", ephemeral=True)
+        await interaction.response.send_message("\u73fe\u5728\u6709\u52b9\u306a\u30d0\u30d5\u306f\u3042\u308a\u307e\u305b\u3093\u3002", ephemeral=True)
         return
 
     lines = []
@@ -743,27 +606,37 @@ async def buffs(interaction: discord.Interaction):
         remain = max(0, buff.get("expires_at", 0) - current)
         minutes = math.ceil(remain / 60)
         item = SHOP_ITEMS.get(buff.get("item_id"), {})
-        lines.append(f"**{item.get('name', buff_type)}**: about {minutes} min left")
+        lines.append(f"**{item.get('name', buff_type)}**\uff1a\u6b8b\u308a\u7d04{minutes}\u5206")
 
-    embed = discord.Embed(title="Active Buffs", description="\n".join(lines), color=discord.Color.blue())
+    embed = discord.Embed(title="\u2728 \u6709\u52b9\u306a\u30d0\u30d5", description="\n".join(lines), color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="shop", description="Show shop items")
+@bot.tree.command(name="shop", description="\u30b7\u30e7\u30c3\u30d7\u306e\u5546\u54c1\u4e00\u89a7\u3092\u8868\u793a\u3057\u307e\u3059")
 async def shop(interaction: discord.Interaction):
-    embed = discord.Embed(title="Shop", description="Use `/buy item_id` to buy an item.", color=discord.Color.green())
+    embed = discord.Embed(
+        title="\U0001f6d2 \u30b7\u30e7\u30c3\u30d7",
+        description="\u8cfc\u5165\u3059\u308b\u306b\u306f `/buy item_id` \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002\u5546\u54c1ID\u306f\u82f1\u5b57\u306e\u307e\u307e\u5165\u529b\u3057\u307e\u3059\u3002",
+        color=discord.Color.green()
+    )
+
     for item_id, item in SHOP_ITEMS.items():
         embed.add_field(
-            name=f"{item['name']} - {item['price']:,} coins",
-            value=f"`{item_id}`\n{item['description']}",
+            name=f"{item['name']}\uff5c{item['price']:,}\u30b3\u30a4\u30f3",
+            value=f"\u5546\u54c1ID: `{item_id}`\n{item['description']}",
             inline=False,
         )
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="buy", description="Buy a shop item")
+@bot.tree.command(name="buy", description="\u30b7\u30e7\u30c3\u30d7\u306e\u5546\u54c1\u3092\u8cfc\u5165\u3057\u307e\u3059")
 async def buy(interaction: discord.Interaction, item_id: str):
     item_id = item_id.lower().strip()
+
     if item_id not in SHOP_ITEMS:
-        await interaction.response.send_message("Unknown item_id. Use `/shop`.", ephemeral=True)
+        await interaction.response.send_message(
+            "\u305d\u306e\u5546\u54c1ID\u306f\u5b58\u5728\u3057\u307e\u305b\u3093\u3002`/shop` \u3067\u5546\u54c1\u4e00\u89a7\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+            ephemeral=True
+        )
         return
 
     data = load_data(interaction.guild.id)
@@ -773,14 +646,23 @@ async def buy(interaction: discord.Interaction, item_id: str):
 
     if not spend_coins(data, user_id, item["price"], f"buy_{item_id}"):
         await interaction.response.send_message(
-            f"Not enough coins. Need {item['price']:,}, you have {info.get('coins', 0):,}.",
-            ephemeral=True,
+            f"\u30b3\u30a4\u30f3\u304c\u8db3\u308a\u307e\u305b\u3093\u3002\n"
+            f"\u5fc5\u8981: **{item['price']:,}\u30b3\u30a4\u30f3**\n"
+            f"\u6240\u6301: **{info.get('coins', 0):,}\u30b3\u30a4\u30f3**",
+            ephemeral=True
         )
         return
 
     add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
     save_data(interaction.guild.id, data)
-    await interaction.response.send_message(f"Bought **{item['name']}**. Effect: {item['description']}", ephemeral=True)
+
+    await interaction.response.send_message(
+        f"\u2705 **{item['name']}** \u3092\u8cfc\u5165\u3057\u307e\u3057\u305f\uff01\n"
+        f"\u52b9\u679c: {item['description']}",
+        ephemeral=True
+    )
+# =========================
+# /rank
 # =========================
 @bot.tree.command(name="rank", description="自分のレベルを確認")
 async def rank(interaction: discord.Interaction):
@@ -1111,18 +993,6 @@ async def weekly_ranking_task():
             reverse=True
         )
         top3 = sorted_users[:3]
-        weekly_reward_text = ""
-        for rank_no, (uid, info) in enumerate(top3, start=1):
-            reward = WEEKLY_RANK_REWARDS.get(rank_no, 0)
-            gained = add_coins(data, uid, reward, f"weekly_rank_{rank_no}", apply_daily_cap=False)
-            weekly_reward_text += f"{rank_no}菴・<@{uid}>: +{gained} coins\n"
-
-        active_bonus_count = 0
-        for uid, info in sorted_users:
-            if info.get("weekly_xp", 0) >= WEEKLY_ACTIVE_XP_TARGET:
-                gained = add_coins(data, uid, WEEKLY_ACTIVE_XP_REWARD, "weekly_active_bonus", apply_daily_cap=False)
-                if gained > 0:
-                    active_bonus_count += 1
 
         for role_name in weekly_roles.values():
             role = discord.utils.get(guild.roles, name=role_name)
@@ -1145,11 +1015,6 @@ async def weekly_ranking_task():
                 color=discord.Color.gold()
             )
             await notify_channel.send(embed=embed)
-            if weekly_reward_text:
-                await notify_channel.send(
-                    f"Weekly coin rewards:\n{weekly_reward_text}\n"
-                    f"Active bonus: {active_bonus_count} users got +{WEEKLY_ACTIVE_XP_REWARD} coins"
-                )
 
         # 前週データを保存してリセット
         for i, (uid, info) in enumerate(sorted_users, start=1):
@@ -1165,15 +1030,8 @@ async def weekly_ranking_task():
         save_data(gid, data)
 
 # =========================
-# XP BOOST TASK（全サーバー）
-# 毎日ランダムな時間帯に2回発動（朝8-11時・夜18-22時）
+# XP Decay Task
 # =========================
-
-# 当日のブースト予定時刻を保持 { "YYYY-MM-DD": [hour1, hour2] }
-_boost_schedule = {}
-# 発動済みフラグ { "YYYY-MM-DD_hour": True }
-_boost_fired = {}
-
 @tasks.loop(hours=24)
 async def decay_task():
     await bot.wait_until_ready()
@@ -1191,14 +1049,21 @@ async def decay_task():
         for uid, info in data.items():
             if uid == LAST_DECAY_KEY or not isinstance(info, dict):
                 continue
-
             current_xp = info.get("xp", 0)
             if current_xp > 0:
                 info["xp"] = max(0, int(current_xp * (1 - DECAY_PERCENT)))
 
         data[LAST_DECAY_KEY] = today
         save_data(gid, data)
+# =========================
+# XP BOOST TASK（全サーバー）
+# 毎日ランダムな時間帯に2回発動（朝8-11時・夜18-22時）
+# =========================
 
+# 当日のブースト予定時刻を保持 { "YYYY-MM-DD": [hour1, hour2] }
+_boost_schedule = {}
+# 発動済みフラグ { "YYYY-MM-DD_hour": True }
+_boost_fired = {}
 
 @tasks.loop(minutes=1)
 async def xp_boost_scheduler():
@@ -1398,18 +1263,6 @@ async def handle_event_boss_clear(guild, event_boss):
 
     # MVPランキング
     sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
-    data = load_data(gid)
-    coin_text = ""
-    for uid, dmg in event_boss["damage"].items():
-        if dmg <= 0:
-            continue
-        reward = max(1, int(dmg * BOSS_COIN_RATE))
-        gained = add_coins(data, uid, reward, "event_boss_clear", apply_daily_cap=False)
-        coin_text += f"<@{uid}> +{gained} coins\n"
-    save_data(gid, data)
-    if notify_channel and coin_text:
-        await notify_channel.send("Event boss coin rewards:\n" + coin_text[:1800])
-
     mvp_text = ""
     medals = ["🥇", "🥈", "🥉"]
     for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
@@ -1486,17 +1339,6 @@ async def handle_boss_clear(guild, boss):
         if member and role:
             await member.add_roles(role)
 
-    data = load_data(gid)
-    coin_text = ""
-    for uid, dmg in boss["damage"].items():
-        if dmg <= 0:
-            continue
-        reward = max(1, int(dmg * BOSS_COIN_RATE))
-        gained = add_coins(data, uid, reward, "boss_clear", apply_daily_cap=False)
-        coin_text += f"<@{uid}> +{gained} coins\n"
-    save_data(gid, data)
-    if notify_channel and coin_text:
-        await notify_channel.send("Boss coin rewards:\n" + coin_text[:1800])
     sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
     mvp_text = ""
     medals = ["🥇", "🥈", "🥉"]
@@ -1760,7 +1602,7 @@ async def setuproles(interaction: discord.Interaction):
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
             "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
             "CORE", "MEMBER", "MEMBER Lite",
-            "⚔️ボス討伐者", "PHOTO+", "👑BOSS VIP"
+            "⚔️ボス討伐者", "PHOTO+"
         ]
         bot_role = guild.me.top_role
         max_pos = bot_role.position - 1
@@ -1938,44 +1780,6 @@ bot.tree.add_command(eventboss_group)
 # サーバー参加時：ロール＆チャンネル自動作成
 # =========================
 @bot.event
-async def on_invite_create(invite):
-    invite_cache.setdefault(invite.guild.id, {})[invite.code] = invite.uses
-
-@bot.event
-async def on_invite_delete(invite):
-    invite_cache.setdefault(invite.guild.id, {}).pop(invite.code, None)
-
-@bot.event
-async def on_member_join(member):
-    guild = member.guild
-    before = invite_cache.get(guild.id, {})
-    inviter = None
-    try:
-        invites = await guild.invites()
-    except discord.Forbidden:
-        return
-
-    after = {invite.code: invite.uses for invite in invites}
-    for invite in invites:
-        if invite.uses > before.get(invite.code, 0):
-            inviter = invite.inviter
-            break
-
-    invite_cache[guild.id] = after
-    if not inviter or inviter.bot or inviter.id == member.id:
-        return
-
-    data = load_data(guild.id)
-    inviter_id = str(inviter.id)
-    gained = add_coins(data, inviter_id, INVITE_REWARD_COINS, "invite_reward")
-    save_data(guild.id, data)
-
-    ch_id = get_level_channel_id(guild.id)
-    notify_channel = guild.get_channel(ch_id) if ch_id else None
-    if notify_channel and gained > 0:
-        await notify_channel.send(f"{inviter.mention} invited {member.mention}! +{gained} coins")
-
-@bot.event
 async def on_guild_join(guild):
     roles_to_create = [
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
@@ -2016,7 +1820,7 @@ async def on_guild_join(guild):
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
             "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
             "CORE", "MEMBER", "MEMBER Lite",
-            "⚔️ボス討伐者", "PHOTO+", "👑BOSS VIP"
+            "⚔️ボス討伐者", "PHOTO+"
         ]
 
         # Botのロールを取得（一番上に移動）
@@ -2108,11 +1912,6 @@ async def on_ready():
         boss_spawn_task.start()
     if not boss_damage_report.is_running():
         boss_damage_report.start()
-    for guild in bot.guilds:
-        try:
-            invite_cache[guild.id] = {invite.code: invite.uses for invite in await guild.invites()}
-        except discord.Forbidden:
-            invite_cache[guild.id] = {}
 
     # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
