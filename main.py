@@ -501,6 +501,8 @@ async def check_level_up(member, data, user_id):
 # =========================
 @bot.event
 async def on_message(message):
+    info = ensure_user_data(data, user_id)
+
     if message.author.bot:
         return
 
@@ -1172,6 +1174,32 @@ async def weekly_ranking_task():
 _boost_schedule = {}
 # 発動済みフラグ { "YYYY-MM-DD_hour": True }
 _boost_fired = {}
+
+@tasks.loop(hours=24)
+async def decay_task():
+    await bot.wait_until_ready()
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+
+    for guild in bot.guilds:
+        gid = guild.id
+        data = load_data(gid)
+        if not data:
+            continue
+
+        if data.get(LAST_DECAY_KEY) == today:
+            continue
+
+        for uid, info in data.items():
+            if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+                continue
+
+            current_xp = info.get("xp", 0)
+            if current_xp > 0:
+                info["xp"] = max(0, int(current_xp * (1 - DECAY_PERCENT)))
+
+        data[LAST_DECAY_KEY] = today
+        save_data(gid, data)
+
 
 @tasks.loop(minutes=1)
 async def xp_boost_scheduler():
