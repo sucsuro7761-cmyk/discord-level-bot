@@ -526,7 +526,7 @@ async def on_message(message):
     # クリティカル発生時に通知
     if crit_name:
         await message.channel.send(
-            f"{crit_name} {message.author.mention} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+            f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
         )
 
     await check_level_up(message.author, data, user_id)
@@ -613,7 +613,7 @@ async def on_voice_state_update(member, before, after):
                 crit_ch = member.guild.get_channel(ch_id) if ch_id else None
                 if crit_ch:
                     await crit_ch.send(
-                        f"{crit_name_vc} {member.mention} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                        f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
                     )
 
             await check_level_up(member, data, user_id)
