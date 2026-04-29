@@ -501,8 +501,6 @@ async def check_level_up(member, data, user_id):
 # =========================
 @bot.event
 async def on_message(message):
-    info = ensure_user_data(data, user_id)
-
     if message.author.bot:
         return
 
@@ -516,8 +514,9 @@ async def on_message(message):
     cooldowns[ck] = current_time
 
     data = load_data(guild_id)
-    if user_id not in data:
-        data[user_id] = {}
+    info = ensure_user_data(data, user_id)
+    data.setdefault(LAST_DECAY_KEY, "")
+
 
     data[user_id].setdefault("xp", 0)
     data[user_id].setdefault("level", 1)
