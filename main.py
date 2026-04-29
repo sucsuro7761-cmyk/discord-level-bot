@@ -23,7 +23,7 @@ JST = pytz.timezone("Asia/Tokyo")
 # =========================
 # Coin / Shop Config
 # =========================
-COIN_DAILY_CAP = 1500
+COIN_DAILY_CAP = 3000
 
 SHOP_ITEMS = {
     "xp_small": {
