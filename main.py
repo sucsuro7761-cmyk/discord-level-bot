@@ -1686,7 +1686,7 @@ async def chest(interaction: discord.Interaction):
         )
         return
 
-    coin_gain = random.randint(300, 1000)
+    coin_gain = random.randint(10, 100)
     coin_gain = min(coin_gain, COIN_DAILY_CAP - today_earned)
     info["coins"] = info.get("coins", 0) + coin_gain
     info["coin_daily_earned"] = today_earned + coin_gain
