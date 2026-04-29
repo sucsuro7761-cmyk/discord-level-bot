@@ -23,7 +23,7 @@ JST = pytz.timezone("Asia/Tokyo")
 # =========================
 # Coin / Shop Config
 # =========================
-COIN_DAILY_CAP = 3000
+COIN_DAILY_CAP = 1500
 
 SHOP_ITEMS = {
     "xp_small": {
@@ -40,14 +40,6 @@ SHOP_ITEMS = {
         "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 2.0,
-        "duration": 30 * 60,
-    },
-    "boss_ct_reduce": {
-        "name": "\u30af\u30fc\u30eb\u30c0\u30a6\u30f3\u77ed\u7e2e",
-        "price": 800,
-        "description": "\u30dc\u30b9\u653b\u6483\u306e\u30af\u30fc\u30eb\u30c0\u30a6\u30f3\u304c20%\u77ed\u7e2e\u3055\u308c\u307e\u3059\uff0830\u5206\uff09",
-        "buff_type": "boss_cooldown_multiplier",
-        "value": 0.8,
         "duration": 30 * 60,
     },
     "daily_boost": {
@@ -67,11 +59,11 @@ SHOP_ITEMS = {
         "duration": 15 * 60,
     },
     "crit_up": {
-        "name": "\u30af\u30ea\u30c6\u30a3\u30ab\u30eb\u5f37\u5316",
+        "name": "クリティカル強化",
         "price": 800,
-        "description": "\u30af\u30ea\u30c6\u30a3\u30ab\u30eb\u7387\u304c20%\u4e0a\u304c\u308a\u307e\u3059\uff0815\u5206\uff09",
+        "description": "クリティカル発生率がアップ！獲得XPに超高倍率ダメージ（15分）",
         "buff_type": "crit_bonus",
-        "value": 0.20,
+        "value": True,
         "duration": 15 * 60,
     },
     "boss_slayer": {
@@ -83,6 +75,35 @@ SHOP_ITEMS = {
         "duration": 15 * 60,
     },
 }
+
+# =========================
+# クリティカルシステム
+# =========================
+# バフあり/なしで確率が変わる
+# ミニCT: バフあり10% / バフなし3%  → ×5
+# CT:     バフあり5%  / バフなし1%  → ×20
+# 超CT:   バフあり3%  / バフなし0.5% → ×50
+# 超+CT:  バフあり0.5%/ バフなし0.2% → ×100
+
+CRIT_TABLE = [
+    # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
+    ("超+CT", 0.005, 0.002, 100, "💥"),
+    ("超CT",  0.03,  0.005,  50, "⚡"),
+    ("CT",    0.05,  0.01,   20, "🔥"),
+    ("ミニCT",0.10,  0.03,    5, "✨"),
+]
+
+def calc_crit(base_xp, has_crit_buff):
+    """クリティカル判定を行い (最終XP, クリット名orNone, 倍率) を返す"""
+    r = random.random()
+    cumulative = 0.0
+    for name, prob_buff, prob_normal, multiplier, emoji in CRIT_TABLE:
+        prob = prob_buff if has_crit_buff else prob_normal
+        cumulative += prob
+        if r < cumulative:
+            return int(base_xp * multiplier), f"{emoji} {name}！", multiplier
+    return base_xp, None, 1
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -488,17 +509,25 @@ async def on_message(message):
 
     boost = get_boost(guild_id)
 
-    # ショップバフ適用（xp_multiplier）
+    # ショップバフ適用（xp_multiplier・crit_bonus）
     data_tmp = load_data(guild_id)
     info_tmp = data_tmp.get(user_id, {})
     cleanup_expired_buffs(info_tmp)
     xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
     shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
+    has_crit_buff = bool(info_tmp.get("buffs", {}).get("crit_bonus"))
 
-    xp_gain = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
+    base_xp = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
+    xp_gain, crit_name, crit_multi = calc_crit(base_xp, has_crit_buff)
     data[user_id]["xp"] += xp_gain
     data[user_id]["weekly_xp"] += xp_gain
     data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
+
+    # クリティカル発生時に通知
+    if crit_name:
+        await message.channel.send(
+            f"{crit_name} {message.author.mention} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+        )
 
     await check_level_up(message.author, data, user_id)
     save_data(guild_id, data)
@@ -565,11 +594,27 @@ async def on_voice_state_update(member, before, after):
             boost = get_boost(guild_id)
             # ミュート中は2XP、ミュート解除（発言中）は15XP
             is_muted = member.voice.self_mute or member.voice.mute
-            base_xp = 3 if is_muted else 15
-            gain = int(base_xp * boost["multiplier"])
+            base_xp_vc = 2 if is_muted else 15
+
+            # クリティカル判定
+            vc_info = data.get(user_id, {})
+            cleanup_expired_buffs(vc_info)
+            has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
+            base_xp_boosted = int(base_xp_vc * boost["multiplier"])
+            gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc)
+
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
             data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+
+            # クリティカル発生時に通知チャンネルへ
+            if crit_name_vc:
+                ch_id = get_level_channel_id(guild_id)
+                crit_ch = member.guild.get_channel(ch_id) if ch_id else None
+                if crit_ch:
+                    await crit_ch.send(
+                        f"{crit_name_vc} {member.mention} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                    )
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
