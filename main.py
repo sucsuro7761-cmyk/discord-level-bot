@@ -2321,6 +2321,77 @@ async def on_guild_join(guild):
         await desc_channel.send(embed=embed6)
 
 
+
+# =========================
+# /announce（全サーバー一斉アナウンス）
+# =========================
+@bot.tree.command(name="announce", description="全サーバーにアナウンスを送信（Bot管理者専用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def announce(
+    interaction: discord.Interaction,
+    message: str,
+    mention_everyone: bool = False,
+    target: str = "notify"  # "notify" or "desc" or "both"
+):
+    # Bot所有者のIDチェック（セキュリティ強化）
+    app_info = await bot.application_info()
+    if interaction.user.id != app_info.owner.id:
+        await interaction.response.send_message(
+            "❌ このコマンドはBot管理者のみ使用できます！",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    embed = discord.Embed(
+        title="📢 お知らせ",
+        description=message,
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text=f"送信者: {interaction.user.display_name}")
+    embed.timestamp = datetime.now(JST)
+
+    prefix = "@everyone\n" if mention_everyone else ""
+    success = 0
+    failed = 0
+
+    for guild in bot.guilds:
+        channels_to_send = []
+
+        if target in ("notify", "both"):
+            ch_id = get_level_channel_id(guild.id)
+            ch = guild.get_channel(ch_id) if ch_id else None
+            if ch:
+                channels_to_send.append(ch)
+
+        if target in ("desc", "both"):
+            desc_ch = discord.utils.get(guild.text_channels, name="bot説明")
+            if desc_ch:
+                channels_to_send.append(desc_ch)
+
+        for ch in channels_to_send:
+            try:
+                await ch.send(prefix, embed=embed)
+                success += 1
+            except Exception:
+                failed += 1
+
+    await interaction.followup.send(
+        f"✅ アナウンス送信完了！\n"
+        f"・成功: {success}チャンネル\n"
+        f"・失敗: {failed}チャンネル",
+        ephemeral=True
+    )
+
+@announce.error
+async def announce_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "❌ このコマンドは管理者権限が必要です！",
+            ephemeral=True
+        )
+
 # =========================
 # 起動時
 # =========================
