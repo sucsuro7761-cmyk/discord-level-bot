@@ -1,4 +1,4 @@
-import discord
+\import discord
 from discord.ext import commands, tasks
 import json
 import os
@@ -2153,27 +2153,173 @@ async def on_guild_join(guild):
                 "**作成されたもの**\n"
                 f"📢 通知チャンネル: {notify_channel.mention}\n"
                 f"🎭 ロール: {len(created_roles)}個作成\n\n"
-                "**使い方**\n"
-                "メッセージを送るとXPが貯まります！\n"
-                "VCに2人以上いるとXPが貯まります！\n"
-                "毎週月曜に週ボスが出現します！"
+                "詳しい使い方は **#bot説明** チャンネルをご確認ください！"
             ),
             color=discord.Color.green()
         )
-        embed.add_field(
-            name="📋 コマンド一覧",
-            value=(
-                "`/rank` - 自分のランク確認\n"
-                "`/myxp` - XP詳細確認\n"
-                "`/top` - ランキングTOP10\n"
-                "`/boss` - 週ボス状況確認\n"
-                "`/setchannel` - 通知チャンネル変更（管理者）\n"
-                "`/setuproles` - ロール・チャンネル再セットアップ（管理者）\n"
-                "`/userdata` - ユーザーデータ確認（管理者）\n"
-                "`/alldata` - 全データCSV出力（管理者）"
-            )
-        )
         await notify_channel.send(embed=embed)
+
+    # ===== bot説明チャンネルを作成 =====
+    desc_channel = None
+    existing_desc = discord.utils.get(guild.text_channels, name="bot説明")
+    if existing_desc:
+        desc_channel = existing_desc
+    else:
+        try:
+            overwrites_desc = {
+                guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
+                guild.me: discord.PermissionOverwrite(send_messages=True, read_messages=True)
+            }
+            desc_channel = await guild.create_text_channel(
+                name="bot説明",
+                overwrites=overwrites_desc,
+                reason="Bot自動セットアップ"
+            )
+        except discord.Forbidden:
+            pass
+
+    if desc_channel:
+        embed1 = discord.Embed(
+            title="🤖 レベルBotへようこそ！",
+            description=(
+                "このBotはDiscordサーバーにレベル・XP・ランキング・ボス討伐などの\n"
+                "ゲーミフィケーション機能を追加します！\n\n"
+                "**📌 基本的な仕組み**\n"
+                "・メッセージを送ると**XP**が貯まります（10秒クールダウン）\n"
+                "・VCに2人以上いると**30秒ごとにXP**が貯まります\n"
+                "　└ ミュート中: +2XP　／　発言中: +15XP\n"
+                "・XPが一定量貯まると**レベルアップ**します\n"
+                "・レベルに応じて**ランクロール**が自動付与されます\n\n"
+                "**🔥 XPブースト**\n"
+                "・毎日ランダムな時間に**2〜3倍ブースト**が1時間発動！\n"
+                "・ボス討伐後は**全員XP2倍**になります\n\n"
+                "**✨ クリティカル**\n"
+                "XP獲得時に低確率でクリティカルが発生しXPが大幅アップ！\n"
+                "✨ミニCT×5 ／ 🔥CT×10 ／ ⚡超CT×25 ／ 💥超+CT×50"
+            ),
+            color=discord.Color.blue()
+        )
+        await desc_channel.send(embed=embed1)
+
+        embed2 = discord.Embed(
+            title="🎭 ランクロール一覧",
+            description=(
+                "レベルに応じて自動でロールが変わります！\n\n"
+                "Lv1〜9：MEMBER Lite\n"
+                "Lv10〜29：MEMBER\n"
+                "Lv30〜49：CORE\n"
+                "Lv50〜74：SELECT\n"
+                "Lv75〜99：PREMIUM\n"
+                "Lv100〜199：VIP Lite\n"
+                "Lv200〜999：VIP\n"
+                "Lv1000〜：💎 Legend\n\n"
+                "🌟 **Lv3達成で PHOTO+ ロールを永久取得！**\n"
+                "🥇 **週間TOP3には週間ロールを付与！**\n"
+                "⚔️ **ボス討伐参加者には ⚔️ボス討伐者 ロールを付与！**\n"
+                "👑 **イベントボス討伐で 👑BOSS VIP ロールを付与！**"
+            ),
+            color=discord.Color.gold()
+        )
+        await desc_channel.send(embed=embed2)
+
+        embed3 = discord.Embed(
+            title="🎁 デイリーボーナス & 💰 コインシステム",
+            description=(
+                "**🎁 デイリーボーナス（1日1回）**\n"
+                "毎日最初のメッセージでXP & コインを獲得！\n"
+                "1日目:+100XP / 2日目:+200XP / 3日目:+300XP\n"
+                "4日目:+500XP / 5日目以降:+1000XP（MAX）\n"
+                "連続ログインでコインも増加！（100+連続日数×20、上限500）\n\n"
+                "**💰 コイン獲得方法**\n"
+                "・レベルアップ: +100〜500コイン\n"
+                "・週間ランキング: 1位3000 / 2位2000 / 3位1000コイン\n"
+                "・週間1000XP達成ボーナス: +500コイン\n"
+                "・ボス討伐: ダメージ×0.1コイン\n"
+                "・宝箱（/chest）: 10〜100コイン（1時間CD）\n"
+                "・デイリーミッション（/dailymission）: +200コイン\n\n"
+                "※ 1日の獲得上限は **1,500コイン** です"
+            ),
+            color=discord.Color.green()
+        )
+        await desc_channel.send(embed=embed3)
+
+        embed4 = discord.Embed(
+            title="🛒 ショップアイテム一覧",
+            description=(
+                "コインを使ってアイテムを購入！（`/shop` で確認・`/buy` で購入）\n\n"
+                "**⚙️ 便利系**\n"
+                "・**XPブースト（小）** … 1,500コイン｜XP×1.5（30分）\n"
+                "・**XPブースト（中）** … 2,000コイン｜XP×2.0（30分）\n"
+                "・**デイリー強化** … 1,000コイン｜デイリー報酬×1.5（24時間）\n\n"
+                "**⚔️ 戦闘系**\n"
+                "・**攻撃力アップ** … 800コイン｜ボスダメージ×1.2（15分）\n"
+                "・**クリティカル強化** … 5,000コイン｜クリティカル率アップ（15分）\n"
+                "・**ボス特効** … 2,000コイン｜ボスダメージ×1.3（15分）"
+            ),
+            color=discord.Color.purple()
+        )
+        await desc_channel.send(embed=embed4)
+
+        embed5 = discord.Embed(
+            title="👹 ボスシステム",
+            description=(
+                "**週ボス**\n"
+                "・毎週月曜6時に出現！ 初期HP: 30,000\n"
+                "・メッセージ or VC参加で自動攻撃！\n"
+                "・討伐成功: ⚔️ボス討伐者ロール + XP2倍ブースト\n"
+                "・討伐失敗: 残りHP + 最大HPの20%回復して翌週再出現\n"
+                "・HP報告: 毎日0時・6時・12時・18時\n\n"
+                "**👑 イベントボス**\n"
+                "・通常ボスを5回クリアするたびに自動出現！\n"
+                "・討伐成功: 👑BOSS VIPロール + XP3倍ブースト（7日間）\n"
+                "・MVPには特別称号メッセージ！"
+            ),
+            color=discord.Color.red()
+        )
+        await desc_channel.send(embed=embed5)
+
+        embed6 = discord.Embed(
+            title="📋 コマンド一覧",
+            color=discord.Color.blurple()
+        )
+        embed6.add_field(
+            name="👤 一般コマンド",
+            value=(
+                "`/rank` - 自分のレベル・XPバー確認\n"
+                "`/myxp` - レベル・XP・連続ログイン詳細\n"
+                "`/top` - XPランキングTOP10\n"
+                "`/weeklynote` - 今週の活動レポート\n"
+                "`/boss` - 週ボス状況確認\n"
+                "`/eventboss status` - イベントボス状況確認"
+            ),
+            inline=False
+        )
+        embed6.add_field(
+            name="💰 コイン・ショップ",
+            value=(
+                "`/coins` - 所持コイン確認\n"
+                "`/buffs` - 有効なバフ確認\n"
+                "`/shop` - ショップ一覧表示\n"
+                "`/buy <item_id>` - アイテム購入\n"
+                "`/chest` - 宝箱を開ける（1時間CD）\n"
+                "`/dailymission` - デイリーミッション受け取り"
+            ),
+            inline=False
+        )
+        embed6.add_field(
+            name="🔧 管理者コマンド",
+            value=(
+                "`/setchannel` - 通知チャンネル変更\n"
+                "`/setuproles` - ロール・チャンネル再セットアップ\n"
+                "`/userdata @ユーザー` - ユーザーデータ確認\n"
+                "`/alldata` - 全データCSV出力\n"
+                "`/eventboss start` - イベントボス手動召喚\n"
+                "`/eventboss setname` - イベントボス名設定"
+            ),
+            inline=False
+        )
+        await desc_channel.send(embed=embed6)
+
 
 # =========================
 # 起動時
