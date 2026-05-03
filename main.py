@@ -28,7 +28,7 @@ COIN_DAILY_CAP = 1500
 SHOP_ITEMS = {
     "xp_small": {
         "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u5c0f\uff09",
-        "price": 500,
+        "price": 1500,
         "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 1.5,
@@ -36,7 +36,7 @@ SHOP_ITEMS = {
     },
     "xp_medium": {
         "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u4e2d\uff09",
-        "price": 1200,
+        "price": 2000,
         "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 2.0,
@@ -44,7 +44,7 @@ SHOP_ITEMS = {
     },
     "daily_boost": {
         "name": "\u30c7\u30a4\u30ea\u30fc\u5f37\u5316",
-        "price": 700,
+        "price": 1000,
         "description": "\u30c7\u30a4\u30ea\u30fc\u5831\u916c\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0824\u6642\u9593\uff09",
         "buff_type": "daily_multiplier",
         "value": 1.5,
@@ -52,7 +52,7 @@ SHOP_ITEMS = {
     },
     "attack_up": {
         "name": "\u653b\u6483\u529b\u30a2\u30c3\u30d7",
-        "price": 600,
+        "price": 800,
         "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
         "buff_type": "damage_multiplier",
         "value": 1.2,
@@ -60,7 +60,7 @@ SHOP_ITEMS = {
     },
     "crit_up": {
         "name": "クリティカル強化",
-        "price": 800,
+        "price": 5000,
         "description": "クリティカル発生率がアップ！獲得XPに超高倍率ダメージ（15分）",
         "buff_type": "crit_bonus",
         "value": True,
@@ -68,7 +68,7 @@ SHOP_ITEMS = {
     },
     "boss_slayer": {
         "name": "\u30dc\u30b9\u7279\u52b9",
-        "price": 1000,
+        "price": 2000,
         "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.3\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
         "buff_type": "boss_damage_multiplier",
         "value": 1.3,
@@ -80,17 +80,17 @@ SHOP_ITEMS = {
 # クリティカルシステム
 # =========================
 # バフあり/なしで確率が変わる
-# ミニCT: バフあり5% / バフなし1%  → ×5
-# CT:     バフあり3%  / バフなし0.5%  → ×20
+# ミニCT: バフあり5% / バフなし2.5%  → ×5
+# CT:     バフあり3%  / バフなし1.5%  → ×20
 # 超CT:   バフあり0.5%  / バフなし0.25% → ×50
-# 超+CT:  バフあり0.1%/ バフなし0.05%% → ×100
+# 超+CT:  バフあり0.1%/ バフなし0.05% → ×100
 
 CRIT_TABLE = [
     # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
     ("超+CT", 0.001, 0.0005, 50, "💥"),
     ("超CT",  0.005,  0.0025,  25, "⚡"),
-    ("CT",    0.03,  0.005,   10, "🔥"),
-    ("ミニCT",0.05,  0.01,    5, "✨"),
+    ("CT",    0.03,  0.015,   10, "🔥"),
+    ("ミニCT",0.05,  0.025,    5, "✨"),
 ]
 
 def calc_crit(base_xp, has_crit_buff):
@@ -395,7 +395,10 @@ async def check_level_up(member, data, user_id):
         info["coins"] = info.get("coins", 0) + coin_reward
 
         if notify_channel:
-            await notify_channel.send(f"🎉 {member.mention} が Lv{new_level} になりました！ 💰 +{coin_reward}コイン")
+            try:
+                await notify_channel.send(f"🎉 {member.mention} が Lv{new_level} になりました！ 💰 +{coin_reward}コイン")
+            except discord.DiscordServerError:
+                pass
 
         if new_level in permanent_roles:
             role_name = permanent_roles[new_level]
@@ -525,9 +528,12 @@ async def on_message(message):
 
     # クリティカル発生時に通知
     if crit_name:
-        await message.channel.send(
-            f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
-        )
+        try:
+            await message.channel.send(
+                f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+            )
+        except discord.DiscordServerError:
+            pass
 
     await check_level_up(message.author, data, user_id)
     save_data(guild_id, data)
@@ -612,9 +618,12 @@ async def on_voice_state_update(member, before, after):
                 ch_id = get_level_channel_id(guild_id)
                 crit_ch = member.guild.get_channel(ch_id) if ch_id else None
                 if crit_ch:
-                    await crit_ch.send(
-                        f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
-                    )
+                    try:
+                        await crit_ch.send(
+                            f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                        )
+                    except discord.DiscordServerError:
+                        pass
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
@@ -730,11 +739,38 @@ async def buy(interaction: discord.Interaction, item_id: str):
     add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
     save_data(interaction.guild.id, data)
 
+    duration_min = item["duration"] // 60
     await interaction.response.send_message(
-        f"\u2705 **{item['name']}** \u3092\u8cfc\u5165\u3057\u307e\u3057\u305f\uff01\n"
-        f"\u52b9\u679c: {item['description']}",
+        f"✅ **{item['name']}** を購入しました！\n"
+        f"効果: {item['description']}",
         ephemeral=True
     )
+
+    # バフ開始通知
+    ch_id = get_level_channel_id(interaction.guild.id)
+    notify_ch = interaction.guild.get_channel(ch_id) if ch_id else None
+    if notify_ch:
+        await notify_ch.send(
+            f"✨ **{interaction.user.display_name}** が **{item['name']}** を使用しました！"
+            f"（有効時間　{duration_min}分）"
+        )
+
+    # バフ終了通知タスク
+    asyncio.create_task(notify_buff_end(
+        interaction.guild, interaction.user.display_name,
+        item["name"], item["duration"]
+    ))
+
+# =========================
+# バフ終了通知
+# =========================
+async def notify_buff_end(guild, user_name, item_name, duration_seconds):
+    await asyncio.sleep(duration_seconds)
+    ch_id = get_level_channel_id(guild.id)
+    notify_ch = guild.get_channel(ch_id) if ch_id else None
+    if notify_ch:
+        await notify_ch.send(f"⏱ **{user_name}** の **{item_name}** の効果が終了しました。")
+
 # =========================
 # /rank
 # =========================
