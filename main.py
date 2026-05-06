@@ -20,6 +20,13 @@ DECAY_PERCENT = 0.05
 LAST_DECAY_KEY = "last_decay"
 DATA_DIR = "/data"
 JST = pytz.timezone("Asia/Tokyo")
+
+# bot管理者ID（環境変数 BOT_ADMIN_IDS にカンマ区切りで設定）
+_raw_admin_ids = os.environ.get("BOT_ADMIN_IDS", "1118472855865266246")
+BOT_ADMIN_IDS = set(int(i.strip()) for i in _raw_admin_ids.split(",") if i.strip().isdigit())
+
+def is_bot_admin(user_id: int) -> bool:
+    return user_id in BOT_ADMIN_IDS
 # =========================
 # Coin / Shop Config
 # =========================
@@ -2625,6 +2632,147 @@ async def announce_error(interaction: discord.Interaction, error):
         )
 
 # =========================
+# 全サーバー対抗戦（週間XP合計ランキング）
+# =========================
+_server_ranking_announced = {}  # { date_str: True }
+
+def get_server_weekly_xp(guild):
+    """サーバーの今週の総XPを返す"""
+    data = load_data(guild.id)
+    total = sum(
+        info.get("weekly_xp", 0)
+        for uid, info in data.items()
+        if uid != LAST_DECAY_KEY
+    )
+    active_members = sum(
+        1 for uid, info in data.items()
+        if uid != LAST_DECAY_KEY and info.get("weekly_xp", 0) > 0
+    )
+    return total, active_members
+
+def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキング", color=discord.Color.gold()):
+    """全サーバーのランキングEmbedを生成"""
+    results = []
+    for guild in bot.guilds:
+        total_xp, active = get_server_weekly_xp(guild)
+        results.append((guild, total_xp, active))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+
+    medals = ["🥇", "🥈", "🥉"]
+    desc = ""
+    for i, (guild, total_xp, active) in enumerate(results, start=1):
+        medal = medals[i - 1] if i <= 3 else f"`{i}.`"
+        desc += f"{medal} **{guild.name}**\n　　総XP：**{total_xp:,}** ／ 参加人数：{active}人\n"
+
+    if not desc:
+        desc = "データがありません。"
+
+    embed = discord.Embed(title=title, description=desc, color=color)
+    embed.set_footer(text="集計期間：今週（月曜リセット）")
+    return embed, results
+
+@tasks.loop(minutes=1)
+async def server_ranking_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+
+    # 毎週水曜（weekday=2）15:00に発表
+    if not (now.weekday() == 2 and now.hour == 15 and now.minute == 0):
+        return
+
+    date_key = now.strftime("%Y-%m-%d")
+    if _server_ranking_announced.get(date_key):
+        return
+    _server_ranking_announced[date_key] = True
+
+    embed, results = build_server_ranking_embed(
+        bot,
+        title="🏆 今週の全サーバー対抗戦 戦況レポート！",
+        color=discord.Color.gold()
+    )
+    now_str = now.strftime("%Y/%m/%d %H:%M")
+    embed.set_footer(text=f"集計時刻：{now_str} JST ／ 集計期間：今週（月曜リセット）")
+
+    # 1位サーバーの追加メッセージ
+    top_msg = ""
+    if results:
+        top_guild, top_xp, _ = results[0]
+        top_msg = f"\n🎉 今週の首位は **{top_guild.name}**！ 総XP **{top_xp:,}**"
+
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            try:
+                await notify_channel.send(content=top_msg if top_msg else None, embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+@bot.tree.command(name="serverranking", description="全サーバーの今週のXPランキングを表示")
+async def serverranking(interaction: discord.Interaction):
+    embed, _ = build_server_ranking_embed(bot)
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /startbattle（bot管理者専用：対抗戦を即時リセット＆スタート）
+# =========================
+@bot.tree.command(name="startbattle", description="【bot管理者専用】全サーバーの週間XPをリセットして対抗戦を即時スタート")
+async def startbattle(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはbot管理者のみ使用できます。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    reset_count = 0
+    for guild in bot.guilds:
+        data = load_data(guild.id)
+        for uid in data:
+            if uid == LAST_DECAY_KEY:
+                continue
+            data[uid]["weekly_xp"] = 0
+            data[uid]["weekly_chat_xp"] = 0
+            data[uid]["weekly_vc_xp"] = 0
+            data[uid]["weekly_active_days"] = []
+        save_data(guild.id, data)
+        reset_count += 1
+
+    # 発表済みフラグもリセット（今週の水曜レポートを再送できるように）
+    _server_ranking_announced.clear()
+
+    now_str = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
+
+    # 全サーバーの通知チャンネルに対抗戦スタートを告知
+    announce_embed = discord.Embed(
+        title="⚔️ 全サーバー対抗戦 スタート！",
+        description=(
+            "全サーバーの週間XPがリセットされました！\n\n"
+            "今ここから新しいバトルが始まります🔥\n"
+            "今週の戦況レポートは **毎週水曜 15:00** に発表されます！\n\n"
+            f"`/serverranking` でいつでも現在の順位を確認できます。"
+        ),
+        color=discord.Color.red()
+    )
+    announce_embed.set_footer(text=f"スタート時刻：{now_str} JST")
+
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            try:
+                await notify_channel.send(embed=announce_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    await interaction.followup.send(
+        f"✅ {reset_count}サーバーのXPをリセットし、対抗戦をスタートしました！",
+        ephemeral=True
+    )
+
+
+# =========================
 # 起動時
 # =========================
 @bot.event
@@ -2645,6 +2793,8 @@ async def on_ready():
         boss_spawn_task.start()
     if not boss_damage_report.is_running():
         boss_damage_report.start()
+    if not server_ranking_task.is_running():
+        server_ranking_task.start()
 
     # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
