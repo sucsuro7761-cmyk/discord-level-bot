@@ -111,8 +111,14 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-cooldowns = {}
 vc_users = {}
+
+# =========================
+# スパム対策（レートリミット）
+# =========================
+# { "guild_id:user_id": [timestamp, timestamp, ...] }
+spam_message_times = {}
+
 # 寝落ち管理: { "guild_id:user_id": True } → XP停止フラグ
 vc_afk_flags = {}
 # 最後にVCでXPを獲得した時刻（90分チェック用）: { "guild_id:user_id": timestamp }
@@ -211,6 +217,39 @@ def set_level_channel_id(guild_id, channel_id):
         config[gid] = {}
     config[gid]["level_channel_id"] = channel_id
     save_config(config)
+
+def get_xp_channel_ids(guild_id):
+    """XPを獲得できるチャンネルIDリストを返す（空=全チャンネル許可）"""
+    config = load_config()
+    return config.get(str(guild_id), {}).get("xp_channels", [])
+
+def add_xp_channel_id(guild_id, channel_id):
+    config = load_config()
+    gid = str(guild_id)
+    if gid not in config:
+        config[gid] = {}
+    channels = config[gid].setdefault("xp_channels", [])
+    if channel_id not in channels:
+        channels.append(channel_id)
+    save_config(config)
+
+def remove_xp_channel_id(guild_id, channel_id):
+    config = load_config()
+    gid = str(guild_id)
+    channels = config.get(gid, {}).get("xp_channels", [])
+    if channel_id in channels:
+        channels.remove(channel_id)
+        config[gid]["xp_channels"] = channels
+        save_config(config)
+        return True
+    return False
+
+def clear_xp_channels(guild_id):
+    config = load_config()
+    gid = str(guild_id)
+    if gid in config:
+        config[gid]["xp_channels"] = []
+        save_config(config)
 
 # =========================
 # Data read/write（サーバーごと）
@@ -425,9 +464,25 @@ async def on_message(message):
     current_time = time.time()
 
     ck = f"{guild_id}:{user_id}"
-    if ck in cooldowns and current_time - cooldowns[ck] < 10:
+
+    # =========================
+    # スパムガード（XPブロック）
+    # 10秒以内に3メッセージ以上でXP無効
+    # =========================
+    times = spam_message_times.setdefault(ck, [])
+    times.append(current_time)
+    spam_message_times[ck] = [t for t in times if current_time - t <= 10]
+    xp_blocked = len(spam_message_times[ck]) >= 3
+
+    # XP獲得チャンネル制限チェック（設定済みの場合のみ対象チャンネルでXP付与）
+    xp_channels = get_xp_channel_ids(guild_id)
+    if xp_channels and message.channel.id not in xp_channels:
+        await bot.process_commands(message)
         return
-    cooldowns[ck] = current_time
+
+    if xp_blocked:
+        await bot.process_commands(message)
+        return
 
     data = load_data(guild_id)
     if user_id not in data:
@@ -660,8 +715,8 @@ async def on_voice_state_update(member, before, after):
             if vc_afk_flags.get(ck):
                 continue
 
-            # 90分（5400秒）ごとにAFKチェック
-            if vc_xp_elapsed >= 5400:
+            # 45分（2700秒）ごとにAFKチェック
+            if vc_xp_elapsed >= 2700:
                 vc_xp_elapsed = 0
                 afk_confirmed = await run_afk_check(member, guild_id, user_id, ck)
                 if afk_confirmed:
@@ -680,28 +735,12 @@ async def on_voice_state_update(member, before, after):
             is_muted = member.voice.self_mute or member.voice.mute
             base_xp_vc = 2 if is_muted else 15
 
-            # クリティカル判定
-            vc_info = data.get(user_id, {})
-            cleanup_expired_buffs(vc_info)
-            has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
-            base_xp_boosted = int(base_xp_vc * boost["multiplier"])
-            gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc)
+            # VCはクリティカルなし・ブーストのみ適用
+            gain = int(base_xp_vc * boost["multiplier"])
 
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
             data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
-
-            # クリティカル発生時に通知チャンネルへ
-            if crit_name_vc:
-                ch_id = get_level_channel_id(guild_id)
-                crit_ch = member.guild.get_channel(ch_id) if ch_id else None
-                if crit_ch:
-                    try:
-                        await crit_ch.send(
-                            f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
-                        )
-                    except discord.DiscordServerError:
-                        pass
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
@@ -1949,6 +1988,87 @@ async def setchannel_error(interaction: discord.Interaction, error):
 
 
 # =========================
+# /set（管理者用サブコマンドグループ）
+# =========================
+set_group = discord.app_commands.Group(name="set", description="管理者用設定コマンド")
+
+@set_group.command(name="getchannel", description="XPを獲得できるチャンネルを追加・削除・リセット（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+@discord.app_commands.describe(
+    action="add=追加 / remove=削除 / list=一覧 / reset=制限解除（全チャンネル許可に戻す）",
+    channel="対象チャンネル（add / remove 時に指定）"
+)
+@discord.app_commands.choices(action=[
+    discord.app_commands.Choice(name="add - チャンネルを追加", value="add"),
+    discord.app_commands.Choice(name="remove - チャンネルを削除", value="remove"),
+    discord.app_commands.Choice(name="list - 現在の設定を確認", value="list"),
+    discord.app_commands.Choice(name="reset - 制限を解除（全チャンネルでXP獲得可）", value="reset"),
+])
+async def set_getchannel(
+    interaction: discord.Interaction,
+    action: str,
+    channel: discord.TextChannel = None
+):
+    guild_id = interaction.guild.id
+
+    if action == "add":
+        if channel is None:
+            await interaction.response.send_message("❌ チャンネルを指定してください。", ephemeral=True)
+            return
+        add_xp_channel_id(guild_id, channel.id)
+        embed = discord.Embed(
+            title="✅ XP獲得チャンネルを追加",
+            description=f"{channel.mention} をXP獲得チャンネルに追加しました。\n指定チャンネル以外ではXPを獲得できなくなります。",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    elif action == "remove":
+        if channel is None:
+            await interaction.response.send_message("❌ チャンネルを指定してください。", ephemeral=True)
+            return
+        success = remove_xp_channel_id(guild_id, channel.id)
+        if success:
+            embed = discord.Embed(
+                title="✅ XP獲得チャンネルを削除",
+                description=f"{channel.mention} をXP獲得チャンネルの一覧から削除しました。",
+                color=discord.Color.orange()
+            )
+        else:
+            embed = discord.Embed(
+                title="⚠️ 未登録のチャンネル",
+                description=f"{channel.mention} はXP獲得チャンネルに登録されていません。",
+                color=discord.Color.red()
+            )
+        await interaction.response.send_message(embed=embed)
+
+    elif action == "list":
+        xp_channels = get_xp_channel_ids(guild_id)
+        if not xp_channels:
+            desc = "現在制限なし。**全チャンネル**でXPを獲得できます。"
+        else:
+            mentions = [f"<#{cid}>" for cid in xp_channels]
+            desc = "以下のチャンネルのみXPを獲得できます：\n" + "\n".join(mentions)
+        embed = discord.Embed(
+            title="📋 XP獲得チャンネル一覧",
+            description=desc,
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    elif action == "reset":
+        clear_xp_channels(guild_id)
+        embed = discord.Embed(
+            title="🔓 XP獲得チャンネル制限を解除",
+            description="チャンネル制限をリセットしました。\n再び**全チャンネル**でXPを獲得できます。",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+bot.tree.add_command(set_group)
+
+
+# =========================
 # /setuproles（管理者用：ロール・チャンネルの再セットアップ）
 # =========================
 @bot.tree.command(name="setuproles", description="ボット用ロール・通知チャンネルを再作成（管理者用）")
@@ -2421,6 +2541,7 @@ async def on_guild_join(guild):
             name="🔧 管理者コマンド",
             value=(
                 "`/setchannel` - 通知チャンネル変更\n"
+                "`/set getchannel` - XP獲得チャンネルの設定\n"
                 "`/setuproles` - ロール・チャンネル再セットアップ\n"
                 "`/userdata @ユーザー` - ユーザーデータ確認\n"
                 "`/alldata` - 全データCSV出力\n"
