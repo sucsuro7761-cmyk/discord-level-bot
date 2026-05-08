@@ -166,7 +166,10 @@ _boss_spawn_announced = {} # { guild_id: date_str }
 # =========================
 BOSS_BASE_HP = 30000
 BOSS_HP_SCALE = 1.2
-BOSS_CLEAR_ROLE = "⚔️ボス討伐者"
+
+def get_boss_clear_role_name(cleared: int) -> str:
+    """討伐回数からロール名を生成（LV〇〇ボス討伐者）"""
+    return f"⚔️ LV{cleared}ボス討伐者"
 
 # =========================
 # イベントボス Config
@@ -300,6 +303,7 @@ def ensure_user_data(data, user_id):
     info.setdefault("buffs", {})
     info.setdefault("coin_daily_earned", 0)
     info.setdefault("coin_total_spent", 0)
+    info.setdefault("decay_warning_days", 0)  # 維持条件を下回り続けた日数
     return info
 
 def spend_coins(data, user_id, amount, reason="spend"):
@@ -458,12 +462,77 @@ async def check_level_up(member, data, user_id):
                 if notify_channel:
                     await notify_channel.send(f"📸 {role_name} を獲得しました！")
 
+async def check_level_down(guild, data, uid):
+    """
+    維持条件：現在レベル × 100 × 10% = 現在レベル × 10 以上のXPを保有していること
+    （例：Lv100 → 100×100×10% = 1,000XP以上が必要）
+    条件未満が7日間連続で続いた場合のみ1レベルダウン。
+    Lv1以下には落ちない。
+    """
+    info = data.get(uid)
+    if not info or not isinstance(info, dict):
+        return
+
+    current_level = info.get("level", 1)
+    current_xp    = info.get("xp", 0)
+
+    if current_level <= 1:
+        info["level_down_streak"] = 0
+        return
+
+    # 維持に必要なXP = 現在レベル × 100 × 10%
+    required_xp = int(current_level * 100 * 0.1)
+
+    if current_xp >= required_xp:
+        # 条件を満たしているのでストリークをリセット
+        info["level_down_streak"] = 0
+        return
+
+    # 条件未満：連続日数をカウント
+    streak = info.get("level_down_streak", 0) + 1
+    info["level_down_streak"] = streak
+
+    ch_id = get_level_channel_id(guild.id)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
+    member = guild.get_member(int(uid))
+
+    if streak < 7:
+        # 毎日警告通知（残り日数をお知らせ）
+        remaining = 7 - streak
+        if notify_channel and member:
+            try:
+                await notify_channel.send(
+                    f"⚠️ {member.mention} の保有XPが維持条件（**{required_xp:,}XP**）を下回っています。"
+                    f"あと **{remaining}日** 続くとランクダウンします！（現在：{current_xp:,}XP）"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return
+
+    # 7日連続で条件未満 → 1レベルダウン
+    new_level = max(1, current_level - 1)
+    info["level"] = new_level
+    info["level_down_streak"] = 0  # ストリークリセット
+
+    if member:
+        await update_rank_role(member, new_level)
+
+    if notify_channel and member:
+        try:
+            await notify_channel.send(
+                f"📉 {member.mention} の保有XPが**{required_xp:,}XP**を7日間下回り続けたため、"
+                f"**Lv{current_level} → Lv{new_level}** にランクダウンしました。"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
 # =========================
-# Message XP
 # =========================
 @bot.event
 async def on_message(message):
     if message.author.bot:
+        return
+    if message.guild is None:
         return
 
     guild_id = message.guild.id
@@ -1340,8 +1409,17 @@ async def decay_task():
             current_xp = info.get("xp", 0)
             if current_xp > 0:
                 info["xp"] = max(0, int(current_xp * (1 - DECAY_PERCENT)))
+            # 毎日0時にコイン日次獲得上限をリセット
+            info["coin_daily_earned"] = 0
 
         data[LAST_DECAY_KEY] = today
+        save_data(gid, data)
+
+        # XP減衰後にランクダウンチェック
+        for uid in list(data.keys()):
+            if uid == LAST_DECAY_KEY:
+                continue
+            await check_level_down(guild, data, uid)
         save_data(gid, data)
 # =========================
 # XP BOOST TASK（全サーバー）
@@ -1619,13 +1697,36 @@ async def handle_boss_clear(guild, boss):
     ch_id = get_level_channel_id(gid)
     notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    role = discord.utils.get(guild.roles, name=BOSS_CLEAR_ROLE)
+    # 討伐回数（cleared はまだインクリメント前）
+    cleared_count = boss.get("cleared", 0)
+    role_name = get_boss_clear_role_name(cleared_count)
+
+    # ロールが既に存在していれば取得、なければ作成
+    role = discord.utils.get(guild.roles, name=role_name)
+    if not role:
+        try:
+            role = await guild.create_role(
+                name=role_name,
+                color=discord.Color.from_rgb(220, 50, 50),
+                reason=f"LV{cleared_count}ボス討伐者ロール自動作成"
+            )
+        except discord.Forbidden:
+            role = None
+
+    # 討伐者全員にロール付与
     for uid, dmg in boss["damage"].items():
         if dmg <= 0:
             continue
         member = guild.get_member(int(uid))
         if member and role:
-            await member.add_roles(role)
+            try:
+                await member.add_roles(role)
+            except discord.Forbidden:
+                pass
+
+    # ボスデータにロール名を記録（月曜削除用）
+    boss["last_clear_role"] = role_name
+    save_boss(gid, boss)
 
     sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
     mvp_text = ""
@@ -1641,7 +1742,7 @@ async def handle_boss_clear(guild, boss):
             description=f"全員で見事ボスを倒しました！\n\n**MVPランキング**\n{mvp_text}",
             color=discord.Color.green()
         )
-        embed.add_field(name="報酬", value=f"🔥 **次のボス出現まで XP 2倍ブースト** 発動！\n`{BOSS_CLEAR_ROLE}` ロール付与！")
+        embed.add_field(name="報酬", value=f"🔥 **次のボス出現まで XP 2倍ブースト** 発動！\n`{role_name}` ロール付与！")
         embed.set_footer(text=f"次のボスHP: {next_hp:,}")
         await notify_channel.send(embed=embed)
 
@@ -1718,6 +1819,24 @@ async def boss_spawn_task():
 
         set_boss_boost(gid, 1)
         set_time_boost(gid, 1)
+
+        # 前週の討伐者ロールを剥がして削除
+        last_role_name = boss.get("last_clear_role")
+        if last_role_name:
+            old_role = discord.utils.get(guild.roles, name=last_role_name)
+            if old_role:
+                for member in guild.members:
+                    if old_role in member.roles:
+                        try:
+                            await member.remove_roles(old_role, reason="週次ボス討伐者ロールリセット")
+                        except discord.Forbidden:
+                            pass
+                try:
+                    await old_role.delete(reason="週次ボス討伐者ロール削除")
+                except discord.Forbidden:
+                    pass
+            boss["last_clear_role"] = None
+            save_boss(gid, boss)
 
         cleared = boss.get("cleared", 0)
 
@@ -2565,16 +2684,13 @@ async def on_guild_join(guild):
 # /announce（全サーバー一斉アナウンス）
 # =========================
 @bot.tree.command(name="announce", description="全サーバーにアナウンスを送信（Bot管理者専用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
 async def announce(
     interaction: discord.Interaction,
     message: str,
     mention_everyone: bool = False,
     target: str = "notify"  # "notify" or "desc" or "both"
 ):
-    # Bot所有者のIDチェック（セキュリティ強化）
-    app_info = await bot.application_info()
-    if interaction.user.id != app_info.owner.id:
+    if not is_bot_admin(interaction.user.id):
         await interaction.response.send_message(
             "❌ このコマンドはBot管理者のみ使用できます！",
             ephemeral=True
@@ -2622,14 +2738,6 @@ async def announce(
         f"・失敗: {failed}チャンネル",
         ephemeral=True
     )
-
-@announce.error
-async def announce_error(interaction: discord.Interaction, error):
-    if isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message(
-            "❌ このコマンドは管理者権限が必要です！",
-            ephemeral=True
-        )
 
 # =========================
 # 全サーバー対抗戦（週間XP合計ランキング）
