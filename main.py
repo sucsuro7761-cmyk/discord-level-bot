@@ -8,10 +8,15 @@ import math
 import asyncio
 import io
 import csv
+import logging
 from flask import Flask
 from threading import Thread
 from datetime import datetime, timezone, timedelta
 import pytz
+
+# discord の INFO ログ（RESUMED等）を非表示
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 
 # =========================
 # Config
@@ -581,6 +586,9 @@ async def on_message(message):
     if today_jst not in data[user_id]["weekly_active_days"]:
         data[user_id]["weekly_active_days"].append(today_jst)
 
+    # 最終アクティブ日を記録（減衰判定用）
+    data[user_id]["last_active_date"] = today_jst
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -777,6 +785,53 @@ async def on_voice_state_update(member, before, after):
         vc_users[ck] = True
         vc_last_xp_time[ck] = time.time()
         vc_xp_elapsed = 0  # 最後のチェックからの経過秒数カウント
+
+        # VC入室時のログインボーナス
+        data = load_data(guild_id)
+        if user_id not in data:
+            data[user_id] = {}
+        info = ensure_user_data(data, user_id)
+
+        today_jst = datetime.now(JST).strftime("%Y-%m-%d")
+        today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        yesterday_utc = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # last_active_date を更新（減衰判定用）
+        info["last_active_date"] = today_jst
+
+        if info["last_daily"] != today_utc:
+            if info["last_daily"] == yesterday_utc:
+                info["login_streak"] += 1
+            else:
+                info["login_streak"] = 1
+
+            streak = info["login_streak"]
+            if streak == 1:
+                bonus = 100
+            elif streak == 2:
+                bonus = 200
+            elif streak == 3:
+                bonus = 300
+            elif streak == 4:
+                bonus = 500
+            else:
+                bonus = 1000
+
+            info["xp"] = info.get("xp", 0) + bonus
+            info["weekly_xp"] = info.get("weekly_xp", 0) + bonus
+            info["last_daily"] = today_utc
+            data[user_id] = info
+            save_data(guild_id, data)
+
+            ch_id = get_level_channel_id(guild_id)
+            notify_channel = member.guild.get_channel(ch_id) if ch_id else None
+            if notify_channel:
+                try:
+                    await notify_channel.send(
+                        f"🎙️ {member.mention} がVCに入室！ログインボーナス **+{bonus}XP**（🔥{streak}日連続）"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
         while vc_users.get(ck):
             await asyncio.sleep(30)
@@ -1389,10 +1444,18 @@ async def weekly_ranking_task():
 # =========================
 # XP Decay Task
 # =========================
-@tasks.loop(hours=24)
+_decay_fired = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
 async def decay_task():
     await bot.wait_until_ready()
-    today = datetime.now(JST).strftime("%Y-%m-%d")
+    now = datetime.now(JST)
+    if not (now.hour == 9 and now.minute == 0):
+        return
+    today = now.strftime("%Y-%m-%d")
+    if _decay_fired.get(today):
+        return
+    _decay_fired[today] = True
 
     for guild in bot.guilds:
         gid = guild.id
@@ -1400,19 +1463,41 @@ async def decay_task():
         if not data:
             continue
 
-        if data.get(LAST_DECAY_KEY) == today:
-            continue
-
         for uid, info in data.items():
             if uid == LAST_DECAY_KEY or not isinstance(info, dict):
                 continue
-            current_xp = info.get("xp", 0)
-            if current_xp > 0:
-                info["xp"] = max(0, int(current_xp * (1 - DECAY_PERCENT)))
-            # 毎日0時にコイン日次獲得上限をリセット
+
+            # 毎日9時にコイン日次獲得上限をリセット
             info["coin_daily_earned"] = 0
 
-        data[LAST_DECAY_KEY] = today
+            # アクティブ判定（今日メッセージを送ったか）
+            last_active = info.get("last_active_date", "")
+            is_active_today = (last_active == today)
+
+            if is_active_today:
+                # アクティブ日は減衰なし・streak リセット
+                info["level_down_streak"] = 0
+                continue
+
+            # 非アクティブ日 → B+C方式で減衰
+            current_xp = info.get("xp", 0)
+            current_level = info.get("level", 1)
+
+            if current_xp > 0:
+                # レベル帯別の減衰率（次レベル必要XPの○%）
+                if current_level < 30:
+                    rate = 0.01
+                elif current_level < 100:
+                    rate = 0.02
+                elif current_level < 200:
+                    rate = 0.03
+                else:
+                    rate = 0.04
+
+                next_level_xp = current_level * 100  # 次レベルに必要なXP
+                decay_amount = max(1, int(next_level_xp * rate))
+                info["xp"] = max(0, current_xp - decay_amount)
+
         save_data(gid, data)
 
         # XP減衰後にランクダウンチェック
