@@ -91,25 +91,43 @@ SHOP_ITEMS = {
 # =========================
 # クリティカルシステム
 # =========================
-# バフあり/なしで確率が変わる
+#【テキスト用】バフあり/なしで確率が変わる
 # ミニCT: バフあり5% / バフなし2.5%  → ×5
-# CT:     バフあり3%  / バフなし1.5%  → ×20
-# 超CT:   バフあり0.5%  / バフなし0.25% → ×50
-# 超+CT:  バフあり0.1%/ バフなし0.05% → ×100
+# CT:     バフあり3%  / バフなし1.5%  → ×10
+# 超CT:   バフあり0.5%  / バフなし0.25% → ×25
+# 超+CT:  バフあり0.1%/ バフなし0.05% → ×50
+#
+# 【VC用】テキストの半分の確率
+# ミニCT: バフあり2.5% / バフなし1.25%  → ×5
+# CT:     バフあり1.5%  / バフなし0.75%  → ×10
+# 超CT:   バフあり0.25%  / バフなし0.125% → ×25
+# 超+CT:  バフあり0.05%/ バフなし0.025% → ×50
 
-CRIT_TABLE = [
+CRIT_TABLE_TEXT = [
     # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
-    ("超+CT", 0.001, 0.0005, 50, "💥"),
+    ("超+CT", 0.001,  0.0005,  50, "💥"),
     ("超CT",  0.005,  0.0025,  25, "⚡"),
-    ("CT",    0.03,  0.015,   10, "🔥"),
-    ("ミニCT",0.05,  0.025,    5, "✨"),
+    ("CT",    0.03,   0.015,   10, "🔥"),
+    ("ミニCT",0.05,   0.025,    5, "✨"),
 ]
 
-def calc_crit(base_xp, has_crit_buff):
+CRIT_TABLE_VC = [
+    # テキストの半分の確率
+    ("超+CT", 0.0005,  0.00025,  50, "💥"),
+    ("超CT",  0.0025,  0.00125,  25, "⚡"),
+    ("CT",    0.015,   0.0075,   10, "🔥"),
+    ("ミニCT",0.025,   0.0125,    5, "✨"),
+]
+
+# 後方互換用（テキストをデフォルトとして残す）
+CRIT_TABLE = CRIT_TABLE_TEXT
+
+def calc_crit(base_xp, has_crit_buff, is_vc=False):
     """クリティカル判定を行い (最終XP, クリット名orNone, 倍率) を返す"""
+    table = CRIT_TABLE_VC if is_vc else CRIT_TABLE_TEXT
     r = random.random()
     cumulative = 0.0
-    for name, prob_buff, prob_normal, multiplier, emoji in CRIT_TABLE:
+    for name, prob_buff, prob_normal, multiplier, emoji in table:
         prob = prob_buff if has_crit_buff else prob_normal
         cumulative += prob
         if r < cumulative:
@@ -720,13 +738,20 @@ async def on_message(message):
 # =========================
 
 class AfkCheckView(discord.ui.View):
-    def __init__(self, ck):
+    def __init__(self, ck, member_id: int):
         super().__init__(timeout=300)  # 5分
         self.ck = ck
+        self.member_id = member_id
         self.responded = False
 
     @discord.ui.button(label="✅ 活動中！", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.member_id:
+            await interaction.response.send_message(
+                "❌ このボタンはあなた宛ではありません。",
+                ephemeral=True
+            )
+            return
         self.responded = True
         vc_afk_flags.pop(self.ck, None)
         await interaction.response.edit_message(
@@ -742,7 +767,7 @@ async def run_afk_check(member, guild_id, user_id, ck):
     if not notify_ch:
         return False
 
-    view = AfkCheckView(ck)
+    view = AfkCheckView(ck, member.id)
     try:
         msg = await notify_ch.send(
             f"⚠️ **寝落ちチェック！** {member.mention}\n"
@@ -866,8 +891,28 @@ async def on_voice_state_update(member, before, after):
             is_muted = member.voice.self_mute or member.voice.mute
             base_xp_vc = 2 if is_muted else 15
 
-            # VCはクリティカルなし・ブーストのみ適用
-            gain = int(base_xp_vc * boost["multiplier"])
+            # VCクリティカル判定（テキストの半分の確率）
+            vc_info = data.get(user_id, {})
+            cleanup_expired_buffs(vc_info)
+            has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
+            base_xp_boosted = int(base_xp_vc * boost["multiplier"])
+            gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc, is_vc=True)
+
+            data[user_id]["xp"] += gain
+            data[user_id]["weekly_xp"] += gain
+            data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+
+            # VCクリティカル発生時に通知
+            if crit_name_vc:
+                ch_id = get_level_channel_id(guild_id)
+                crit_ch = member.guild.get_channel(ch_id) if ch_id else None
+                if crit_ch:
+                    try:
+                        await crit_ch.send(
+                            f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                        )
+                    except discord.DiscordServerError:
+                        pass
 
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
@@ -2963,6 +3008,69 @@ async def startbattle(interaction: discord.Interaction):
         f"✅ {reset_count}サーバーのXPをリセットし、対抗戦をスタートしました！",
         ephemeral=True
     )
+
+
+# =========================
+# /rates（現在のXPブースト倍率確認）
+# =========================
+@bot.tree.command(name="rates", description="現在のXPブースト倍率を確認する")
+async def rates(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    user_id = str(interaction.user.id)
+
+    # サーバーブースト
+    time_m = guild_time_boost.get(guild_id, 1)
+    boss_m = guild_boss_boost.get(guild_id, 1)
+    server_total = time_m * boss_m
+
+    # ショップバフ（個人）
+    data = load_data(guild_id)
+    info = ensure_user_data(data, user_id)
+    cleanup_expired_buffs(info)
+    xp_buff = info.get("buffs", {}).get("xp_multiplier", {})
+    shop_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
+    shop_expires = xp_buff.get("expires_at", 0) if xp_buff else 0
+
+    # 総合倍率
+    total = server_total * shop_multi
+
+    # 表示組み立て
+    lines = []
+
+    # 時間帯ブースト
+    if time_m > 1:
+        lines.append(f"⏰ 時間帯ブースト：**{time_m}倍** ✅")
+    else:
+        lines.append(f"⏰ 時間帯ブースト：なし")
+
+    # ボス討伐ブースト
+    if boss_m > 1:
+        lines.append(f"⚔️ ボス討伐ブースト：**{boss_m}倍** ✅")
+    else:
+        lines.append(f"⚔️ ボス討伐ブースト：なし")
+
+    # ショップバフ
+    if shop_multi > 1:
+        remaining = max(0, int(shop_expires - time.time()))
+        h, m = divmod(remaining // 60, 60)
+        time_str = f"{h}時間{m}分" if h > 0 else f"{m}分"
+        lines.append(f"🛍️ ショップXPバフ：**{shop_multi}倍**（残り {time_str}）✅")
+    else:
+        lines.append(f"🛍️ ショップXPバフ：なし")
+
+    # 総合
+    lines.append("")
+    if total > 1:
+        lines.append(f"✨ **現在の総合倍率：{total:.2g}倍**")
+    else:
+        lines.append(f"✨ **現在の総合倍率：1倍（通常）**")
+
+    embed = discord.Embed(
+        title="📊 現在のXPブースト倍率",
+        description="\n".join(lines),
+        color=discord.Color.gold() if total > 1 else discord.Color.greyple()
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # =========================
