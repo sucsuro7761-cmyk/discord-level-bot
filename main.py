@@ -224,17 +224,7 @@ def config_file():
 # =========================
 # Config read/write（通知チャンネルID保存）
 # =========================
-def load_shop_log(guild_id):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_shop_log(guild_id, log):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(log, f, ensure_ascii=False, indent=2)
+def load_config():
     path = config_file()
     if not os.path.exists(path):
         return {}
@@ -248,6 +238,18 @@ def save_config(config):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(config_file(), "w") as f:
         json.dump(config, f, indent=4)
+
+def load_shop_log(guild_id):
+    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_shop_log(guild_id, log):
+    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
 
 def get_level_channel_id(guild_id):
     config = load_config()
