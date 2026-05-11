@@ -224,7 +224,17 @@ def config_file():
 # =========================
 # Config read/write（通知チャンネルID保存）
 # =========================
-def load_config():
+def load_shop_log(guild_id):
+    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_shop_log(guild_id, log):
+    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(log, f, ensure_ascii=False, indent=2)
     path = config_file()
     if not os.path.exists(path):
         return {}
@@ -470,6 +480,7 @@ async def check_level_up(member, data, user_id):
         coin_reward = min(100 + (new_level * 10), 500)
         info = ensure_user_data(data, user_id)
         info["coins"] = info.get("coins", 0) + coin_reward
+        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_reward
 
         if notify_channel:
             try:
@@ -654,6 +665,7 @@ async def on_message(message):
             add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
             info["coins"] = info.get("coins", 0) + add_amount
             info["coin_daily_earned"] = today_earned + add_amount
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + add_amount
         else:
             streak_coins = 0
 
@@ -1032,6 +1044,17 @@ async def buy(interaction: discord.Interaction, item_id: str):
         return
 
     add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
+
+    # 週間コイン消費ランキング用に記録
+    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + item["price"]
+
+    # 人気アイテムランキング用に記録（サーバー共通ファイル）
+    shop_log = load_shop_log(interaction.guild.id)
+    week_key = datetime.now(JST).strftime("%Y-W%W")
+    shop_log.setdefault(week_key, {})
+    shop_log[week_key][item_id] = shop_log[week_key].get(item_id, 0) + 1
+    save_shop_log(interaction.guild.id, shop_log)
+
     save_data(interaction.guild.id, data)
 
     duration_min = item["duration"] // 60
@@ -1445,6 +1468,7 @@ async def weekly_ranking_task():
                 await member.add_roles(role)
             coin_r = weekly_coin_rewards.get(i, 0)
             info["coins"] = info.get("coins", 0) + coin_r
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_r
             text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp', 0)} XP 💰 +{coin_r:,}コイン\n"
 
         if notify_channel:
@@ -1467,6 +1491,7 @@ async def weekly_ranking_task():
                 continue
             if info.get("weekly_xp", 0) >= 1000:
                 info["coins"] = info.get("coins", 0) + 500
+                info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + 500
                 activity_bonus_users += f"<@{uid}> +500コイン\n"
 
         if notify_channel and activity_bonus_users:
@@ -1483,7 +1508,9 @@ async def weekly_ranking_task():
                 data[uid]["weekly_chat_xp"] = 0
                 data[uid]["weekly_vc_xp"] = 0
                 data[uid]["weekly_active_days"] = []
-                data[uid]["coin_daily_earned"] = 0  # 日次上限もリセット
+                data[uid]["weekly_coins_spent"] = 0
+                data[uid]["weekly_coins_earned"] = 0
+                data[uid]["coin_daily_earned"] = 0
         save_data(gid, data)
 
 # =========================
@@ -1889,6 +1916,7 @@ async def handle_boss_clear(guild, boss):
             continue
         info = ensure_user_data(data, uid)
         info["coins"] = info.get("coins", 0) + coin_reward
+        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_reward
         coin_text += f"<@{uid}> +{coin_reward:,}コイン\n"
     save_data(gid, data)
 
@@ -2974,6 +3002,7 @@ async def startbattle(interaction: discord.Interaction):
             data[uid]["weekly_chat_xp"] = 0
             data[uid]["weekly_vc_xp"] = 0
             data[uid]["weekly_active_days"] = []
+            data[uid]["weekly_coins_spent"] = 0
         save_data(guild.id, data)
         reset_count += 1
 
@@ -3011,8 +3040,80 @@ async def startbattle(interaction: discord.Interaction):
 
 
 # =========================
-# /rates（現在のXPブースト倍率確認）
+# /shopstats（人気アイテムTOP5）
 # =========================
+@bot.tree.command(name="shopstats", description="今週のショップ人気アイテムTOP5を表示")
+async def shopstats(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    shop_log = load_shop_log(guild_id)
+    week_key = datetime.now(JST).strftime("%Y-W%W")
+    week_data = shop_log.get(week_key, {})
+
+    item_ranking = sorted(week_data.items(), key=lambda x: x[1], reverse=True)
+    medals = ["🥇", "🥈", "🥉"]
+    item_lines = []
+    for i, (item_id, count) in enumerate(item_ranking[:5], start=1):
+        item_name = SHOP_ITEMS.get(item_id, {}).get("name", item_id)
+        medal = medals[i - 1] if i <= 3 else f"`{i}.`"
+        item_lines.append(f"{medal} **{item_name}** … {count}回購入")
+
+    item_text = "\n".join(item_lines) if item_lines else "まだデータがありません。"
+
+    embed = discord.Embed(
+        title="🔥 今週の人気アイテム TOP5",
+        description=item_text,
+        color=discord.Color.purple()
+    )
+    embed.set_footer(text="集計期間：今週（月曜リセット）")
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /servercoinsranking（サーバーごとの週間コイン獲得・消費ランキング）
+# =========================
+@bot.tree.command(name="servercoinsranking", description="今週のサーバー内コイン獲得数・消費数ランキングを表示")
+async def servercoinsranking(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    data = load_data(guild_id)
+
+    earned_ranking = []
+    spent_ranking = []
+
+    for uid, info in data.items():
+        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+            continue
+        member = interaction.guild.get_member(int(uid))
+        name = member.display_name if member else f"ID:{uid}"
+
+        earned = info.get("weekly_coins_earned", 0)
+        spent  = info.get("weekly_coins_spent", 0)
+
+        if earned > 0:
+            earned_ranking.append((name, earned))
+        if spent > 0:
+            spent_ranking.append((name, spent))
+
+    earned_ranking.sort(key=lambda x: x[1], reverse=True)
+    spent_ranking.sort(key=lambda x: x[1], reverse=True)
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    def build_lines(ranking):
+        lines = []
+        for i, (name, coins) in enumerate(ranking[:10], start=1):
+            medal = medals[i - 1] if i <= 3 else f"`{i}.`"
+            lines.append(f"{medal} **{name}** … {coins:,}コイン")
+        return "\n".join(lines) if lines else "まだデータがありません。"
+
+    embed = discord.Embed(
+        title="💰 今週のコインランキング",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="📈 獲得数 TOP10", value=build_lines(earned_ranking), inline=False)
+    embed.add_field(name="🛍️ 消費数 TOP10", value=build_lines(spent_ranking), inline=False)
+    embed.set_footer(text="集計期間：今週（月曜リセット）")
+    await interaction.response.send_message(embed=embed)
 @bot.tree.command(name="rates", description="現在のXPブースト倍率を確認する")
 async def rates(interaction: discord.Interaction):
     guild_id = interaction.guild.id
