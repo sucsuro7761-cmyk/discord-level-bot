@@ -79,12 +79,28 @@ SHOP_ITEMS = {
         "duration": 15 * 60,
     },
     "boss_slayer": {
-        "name": "\u30dc\u30b9\u7279\u52b9",
+        "name": "ボス特効",
         "price": 2000,
-        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.3\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
+        "description": "ボスへのダメージが1.3倍になります（15分）",
         "buff_type": "boss_damage_multiplier",
         "value": 1.3,
         "duration": 15 * 60,
+    },
+    "mystery_box": {
+        "name": "🎁 ミステリーボックス",
+        "price": 1500,
+        "description": "開けると何かが飛び出す！ランダム報酬ボックス（専用コマンド /openbox で使用）",
+        "buff_type": None,
+        "value": None,
+        "duration": None,
+    },
+    "investment_pack": {
+        "name": "📈 投資パック",
+        "price": 3000,
+        "description": "3000コインを投資！24時間後に /claiminvest で回収（専用コマンドで購入）",
+        "buff_type": None,
+        "value": None,
+        "duration": None,
     },
 }
 
@@ -1035,6 +1051,20 @@ async def buy(interaction: discord.Interaction, item_id: str):
     user_id = str(interaction.user.id)
     info = ensure_user_data(data, user_id)
     item = SHOP_ITEMS[item_id]
+
+    # 特殊アイテムは専用コマンドへリダイレクト
+    if item_id == "mystery_box":
+        await interaction.response.send_message(
+            "🎁 ミステリーボックスは `/openbox` コマンドで購入・使用できます！",
+            ephemeral=True
+        )
+        return
+    if item_id == "investment_pack":
+        await interaction.response.send_message(
+            "📈 投資パックは `/invest` コマンドで購入・使用できます！",
+            ephemeral=True
+        )
+        return
 
     if not spend_coins(data, user_id, item["price"], f"buy_{item_id}"):
         await interaction.response.send_message(
@@ -2162,6 +2192,7 @@ async def chest(interaction: discord.Interaction):
     coin_gain = min(coin_gain, COIN_DAILY_CAP - today_earned)
     info["coins"] = info.get("coins", 0) + coin_gain
     info["coin_daily_earned"] = today_earned + coin_gain
+    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_gain
     save_data(guild_id, data)
 
     embed = discord.Embed(
@@ -3042,17 +3073,296 @@ async def startbattle(interaction: discord.Interaction):
 
 
 # =========================
-# /shopstats（人気アイテムTOP5）
+# ミステリーボックス抽選関数
 # =========================
-@bot.tree.command(name="shopstats", description="今週のショップ人気アイテムTOP5を表示")
+def draw_mystery_box():
+    r = random.random()
+    if r < 0.20:
+        return "lose", None
+    if r < 0.90:
+        reward_type = random.choice(["coins", "xp_boost", "attack_up"])
+        if reward_type == "coins":
+            return "normal", {"type": "coins", "amount": random.randint(500, 2000)}
+        elif reward_type == "xp_boost":
+            return "normal", {"type": "xp_boost", "duration": 30 * 60, "value": 2.0}
+        else:
+            return "normal", {"type": "attack_up", "duration": 15 * 60, "value": 1.2}
+    rare_type = random.choice(["coins", "boss_slayer", "rare_role"])
+    if rare_type == "coins":
+        return "rare", {"type": "coins", "amount": 5000}
+    elif rare_type == "boss_slayer":
+        return "rare", {"type": "boss_slayer", "duration": 30 * 60, "value": 1.5}
+    else:
+        return "rare", {"type": "rare_role"}
+
+# =========================
+# /openbox（ミステリーボックス購入＆使用）
+# =========================
+_openbox_cooldowns = {}
+
+@bot.tree.command(name="openbox", description="🎁 ミステリーボックスを購入して開ける（1500コイン）")
+async def openbox(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    ck = f"{guild_id}:{user_id}"
+    now = time.time()
+
+    if ck in _openbox_cooldowns and now - _openbox_cooldowns[ck] < 30:
+        remain = int(30 - (now - _openbox_cooldowns[ck]))
+        await interaction.response.send_message(f"⏳ あと **{remain}秒** 待ってから開けてください！", ephemeral=True)
+        return
+
+    data  = load_data(guild_id)
+    info  = ensure_user_data(data, user_id)
+    price = SHOP_ITEMS["mystery_box"]["price"]
+
+    if not spend_coins(data, user_id, price, "buy_mystery_box"):
+        await interaction.response.send_message(
+            f"コインが足りません。\n必要: **{price:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
+        )
+        return
+
+    _openbox_cooldowns[ck] = now
+    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
+    shop_log = load_shop_log(guild_id)
+    week_key = datetime.now(JST).strftime("%Y-W%W")
+    shop_log.setdefault(week_key, {})
+    shop_log[week_key]["mystery_box"] = shop_log[week_key].get("mystery_box", 0) + 1
+    save_shop_log(guild_id, shop_log)
+
+    rarity, reward = draw_mystery_box()
+
+    if rarity == "lose":
+        info["coins"] = info.get("coins", 0) + 100
+        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + 100
+        save_data(guild_id, data)
+        embed = discord.Embed(
+            title="📦 ミステリーボックスを開けた！",
+            description="空箱だった…\n\nせめてもの慰めに 💰 **+100コイン** をどうぞ。",
+            color=discord.Color.greyple()
+        )
+        embed.set_footer(text="次こそはレアが出るかも…？")
+        await interaction.response.send_message(embed=embed)
+        return
+
+    embed_color = discord.Color.gold() if rarity == "normal" else discord.Color.from_rgb(255, 50, 200)
+    reward_text = ""
+
+    if reward["type"] == "coins":
+        amount = reward["amount"]
+        info["coins"] = info.get("coins", 0) + amount
+        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + amount
+        reward_text = f"💰 **+{amount:,}コイン** 獲得！"
+    elif reward["type"] == "xp_boost":
+        add_timed_buff(info, "xp_multiplier", reward["value"], reward["duration"], "mystery_xp_boost")
+        reward_text = f"⚡ **XPブースト {reward['value']}倍**（30分）獲得！"
+    elif reward["type"] == "attack_up":
+        add_timed_buff(info, "damage_multiplier", reward["value"], reward["duration"], "mystery_attack")
+        reward_text = f"⚔️ **攻撃力アップ {reward['value']}倍**（15分）獲得！"
+    elif reward["type"] == "boss_slayer":
+        add_timed_buff(info, "boss_damage_multiplier", reward["value"], reward["duration"], "mystery_boss")
+        reward_text = f"🗡️ **ボス特効 {reward['value']}倍**（30分）獲得！"
+    elif reward["type"] == "rare_role":
+        role_name = "🎁 ミステリー当選者"
+        role = discord.utils.get(interaction.guild.roles, name=role_name)
+        if not role:
+            try:
+                role = await interaction.guild.create_role(
+                    name=role_name, color=discord.Color.from_rgb(255, 215, 0), reason="ミステリーボックス レア称号"
+                )
+            except discord.Forbidden:
+                role = None
+        if role:
+            try:
+                await interaction.user.add_roles(role)
+            except discord.Forbidden:
+                pass
+        reward_text = f"👑 **レア称号「{role_name}」** を獲得！"
+
+    save_data(guild_id, data)
+
+    title  = "🌟✨ レア報酬！！ ✨🌟" if rarity == "rare" else "📦 ミステリーボックスを開けた！"
+    prefix = "🎊 おめでとうございます！！\n\n" if rarity == "rare" else ""
+    embed  = discord.Embed(title=title, description=f"{prefix}{reward_text}", color=embed_color)
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# 投資パック定数・抽選
+# =========================
+INVEST_PRICE    = 3000
+INVEST_DURATION = 24 * 60 * 60
+
+INVEST_TABLE = [
+    (0.5, 0.40, "大暴落…",       "📉"),
+    (1.0, 0.35, "元本割れなし",  "📊"),
+    (1.5, 0.20, "安定した利益！", "📊"),
+    (3.0, 0.05, "爆益！！",      "📈"),
+]
+
+def draw_investment():
+    r = random.random()
+    cumulative = 0.0
+    for multiplier, prob, label, emoji in INVEST_TABLE:
+        cumulative += prob
+        if r < cumulative:
+            return multiplier, label, emoji
+    return 1.0, "元本割れなし", "📊"
+
+# =========================
+# /invest（投資パック購入）
+# =========================
+@bot.tree.command(name="invest", description="📈 3000コインを投資！24時間後に /claiminvest で回収")
+async def invest(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data = load_data(guild_id)
+    info = ensure_user_data(data, user_id)
+
+    inv = info.get("investment")
+    if inv:
+        claim_at = inv["invested_at"] + INVEST_DURATION
+        if time.time() < claim_at:
+            remain = int(claim_at - time.time())
+            h, m = divmod(remain // 60, 60)
+            await interaction.response.send_message(
+                f"📊 現在投資中です。回収可能まで残り **{h}時間{m}分**\n`/claiminvest` で回収してください。", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "📊 前回の投資がまだ回収されていません。\n`/claiminvest` で回収してからもう一度どうぞ！", ephemeral=True
+            )
+        return
+
+    if not spend_coins(data, user_id, INVEST_PRICE, "buy_investment_pack"):
+        await interaction.response.send_message(
+            f"コインが足りません。\n必要: **{INVEST_PRICE:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
+        )
+        return
+
+    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + INVEST_PRICE
+    info["investment"] = {"amount": INVEST_PRICE, "invested_at": time.time()}
+    shop_log = load_shop_log(guild_id)
+    week_key = datetime.now(JST).strftime("%Y-W%W")
+    shop_log.setdefault(week_key, {})
+    shop_log[week_key]["investment_pack"] = shop_log[week_key].get("investment_pack", 0) + 1
+    save_shop_log(guild_id, shop_log)
+    save_data(guild_id, data)
+
+    embed = discord.Embed(
+        title="📈 投資完了！",
+        description=f"**{INVEST_PRICE:,}コイン** を投資しました！\n\n24時間後に `/claiminvest` で結果を確認してください。\n運命は…神のみぞ知る🎲",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# /investstatus（投資状況確認）
+# =========================
+@bot.tree.command(name="investstatus", description="現在の投資状況を確認する")
+async def investstatus(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data = load_data(guild_id)
+    info = ensure_user_data(data, user_id)
+    inv  = info.get("investment")
+
+    if not inv:
+        await interaction.response.send_message(
+            "📊 投資中のパックはありません。`/invest` で投資を始めましょう！", ephemeral=True
+        )
+        return
+
+    claim_at  = inv["invested_at"] + INVEST_DURATION
+    claimable = time.time() >= claim_at
+
+    if claimable:
+        status_text = "✅ **回収可能です！** `/claiminvest` で回収してください。"
+        color = discord.Color.green()
+    else:
+        remain = int(claim_at - time.time())
+        h, m   = divmod(remain // 60, 60)
+        status_text = f"⏳ 回収まで残り **{h}時間{m}分**"
+        color = discord.Color.orange()
+
+    embed = discord.Embed(title="📊 投資状況", color=color)
+    embed.add_field(name="投資額", value=f"{inv['amount']:,}コイン", inline=True)
+    embed.add_field(name="状態",   value=status_text, inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# =========================
+# /claiminvest（投資回収）
+# =========================
+@bot.tree.command(name="claiminvest", description="投資パックの結果を回収する")
+async def claiminvest(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data = load_data(guild_id)
+    info = ensure_user_data(data, user_id)
+    inv  = info.get("investment")
+
+    if not inv:
+        await interaction.response.send_message(
+            "📊 投資中のパックがありません。`/invest` で投資を始めましょう！", ephemeral=True
+        )
+        return
+
+    if time.time() < inv["invested_at"] + INVEST_DURATION:
+        remain = int(inv["invested_at"] + INVEST_DURATION - time.time())
+        h, m   = divmod(remain // 60, 60)
+        await interaction.response.send_message(
+            f"⏳ まだ回収できません。あと **{h}時間{m}分** 待ってください！", ephemeral=True
+        )
+        return
+
+    amount               = inv["amount"]
+    multiplier, label, emoji = draw_investment()
+    payout               = int(amount * multiplier)
+    profit               = payout - amount
+
+    info["coins"]               = info.get("coins", 0) + payout
+    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + payout
+    info["investment"]          = None
+    save_data(guild_id, data)
+
+    if multiplier >= 3.0:
+        color = discord.Color.from_rgb(255, 215, 0)
+    elif multiplier >= 1.5:
+        color = discord.Color.green()
+    elif multiplier == 1.0:
+        color = discord.Color.blue()
+    else:
+        color = discord.Color.red()
+
+    profit_text = f"+{profit:,}" if profit >= 0 else f"{profit:,}"
+    embed = discord.Embed(
+        title=f"{emoji} {label}",
+        description=(
+            f"投資額：**{amount:,}コイン**\n"
+            f"倍率：**×{multiplier}**\n"
+            f"回収額：**{payout:,}コイン**（{profit_text}コイン）"
+        ),
+        color=color
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /shopstats（人気アイテムTOP5・全期間）
+# =========================
+@bot.tree.command(name="shopstats", description="全期間の人気アイテムTOP5を表示")
 async def shopstats(interaction: discord.Interaction):
     guild_id = interaction.guild.id
 
     shop_log = load_shop_log(guild_id)
-    week_key = datetime.now(JST).strftime("%Y-W%W")
-    week_data = shop_log.get(week_key, {})
 
-    item_ranking = sorted(week_data.items(), key=lambda x: x[1], reverse=True)
+    # 全週のデータを合算
+    all_time = {}
+    for week_data in shop_log.values():
+        for item_id, count in week_data.items():
+            all_time[item_id] = all_time.get(item_id, 0) + count
+
+    item_ranking = sorted(all_time.items(), key=lambda x: x[1], reverse=True)
     medals = ["🥇", "🥈", "🥉"]
     item_lines = []
     for i, (item_id, count) in enumerate(item_ranking[:5], start=1):
@@ -3063,45 +3373,47 @@ async def shopstats(interaction: discord.Interaction):
     item_text = "\n".join(item_lines) if item_lines else "まだデータがありません。"
 
     embed = discord.Embed(
-        title="🔥 今週の人気アイテム TOP5",
+        title="🔥 人気アイテム TOP5（全期間）",
         description=item_text,
         color=discord.Color.purple()
     )
-    embed.set_footer(text="集計期間：今週（月曜リセット）")
     await interaction.response.send_message(embed=embed)
 
 
 # =========================
-# /servercoinsranking（サーバーごとの週間コイン獲得・消費ランキング）
+# /servercoinsranking（全サーバー対抗・週間コイン獲得ランキング）
 # =========================
-@bot.tree.command(name="servercoinsranking", description="今週のサーバー内コイン獲得数・消費数ランキングを表示")
+@bot.tree.command(name="servercoinsranking", description="今週の全サーバーコイン獲得・消費ランキングを表示")
 async def servercoinsranking(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    data = load_data(guild_id)
-
-    earned_ranking = []
-    spent_ranking = []
-
-    for uid, info in data.items():
-        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
-            continue
-        member = interaction.guild.get_member(int(uid))
-        name = member.display_name if member else f"ID:{uid}"
-
-        earned = info.get("weekly_coins_earned", 0)
-        spent  = info.get("weekly_coins_spent", 0)
-
-        if earned > 0:
-            earned_ranking.append((name, earned))
-        if spent > 0:
-            spent_ranking.append((name, spent))
-
-    earned_ranking.sort(key=lambda x: x[1], reverse=True)
-    spent_ranking.sort(key=lambda x: x[1], reverse=True)
+    await interaction.response.defer()
 
     medals = ["🥇", "🥈", "🥉"]
 
-    def build_lines(ranking):
+    # --- 全サーバーのコイン集計 ---
+    server_earned = []  # (guild_name, total_earned)
+    server_spent  = []  # (guild_name, total_spent)
+
+    for guild in bot.guilds:
+        data = load_data(guild.id)
+        total_earned = sum(
+            info.get("weekly_coins_earned", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        total_spent = sum(
+            info.get("weekly_coins_spent", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        if total_earned > 0:
+            server_earned.append((guild.name, total_earned))
+        if total_spent > 0:
+            server_spent.append((guild.name, total_spent))
+
+    server_earned.sort(key=lambda x: x[1], reverse=True)
+    server_spent.sort(key=lambda x: x[1], reverse=True)
+
+    def build_server_lines(ranking):
         lines = []
         for i, (name, coins) in enumerate(ranking[:10], start=1):
             medal = medals[i - 1] if i <= 3 else f"`{i}.`"
@@ -3109,13 +3421,13 @@ async def servercoinsranking(interaction: discord.Interaction):
         return "\n".join(lines) if lines else "まだデータがありません。"
 
     embed = discord.Embed(
-        title="💰 今週のコインランキング",
+        title="🌐 全サーバー 週間コインランキング",
         color=discord.Color.gold()
     )
-    embed.add_field(name="📈 獲得数 TOP10", value=build_lines(earned_ranking), inline=False)
-    embed.add_field(name="🛍️ 消費数 TOP10", value=build_lines(spent_ranking), inline=False)
+    embed.add_field(name="📈 獲得数 TOP10", value=build_server_lines(server_earned), inline=False)
+    embed.add_field(name="🛍️ 消費数 TOP10", value=build_server_lines(server_spent), inline=False)
     embed.set_footer(text="集計期間：今週（月曜リセット）")
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 @bot.tree.command(name="rates", description="現在のXPブースト倍率を確認する")
 async def rates(interaction: discord.Interaction):
     guild_id = interaction.guild.id
