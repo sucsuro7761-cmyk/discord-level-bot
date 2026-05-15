@@ -41,18 +41,18 @@ SHOP_ITEMS = {
     "xp_small": {
         "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u5c0f\uff09",
         "price": 1500,
-        "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
+        "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 1.5,
-        "duration": 30 * 60,
+        "duration": 10 * 60,
     },
     "xp_medium": {
         "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u4e2d\uff09",
         "price": 2000,
-        "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0830\u5206\uff09",
+        "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
         "buff_type": "xp_multiplier",
         "value": 2.0,
-        "duration": 30 * 60,
+        "duration": 10 * 60,
     },
     "daily_boost": {
         "name": "\u30c7\u30a4\u30ea\u30fc\u5f37\u5316",
@@ -64,11 +64,11 @@ SHOP_ITEMS = {
     },
     "attack_up": {
         "name": "\u653b\u6483\u529b\u30a2\u30c3\u30d7",
-        "price": 800,
-        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0815\u5206\uff09",
+        "price": 1000,
+        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0860\u5206\uff09",
         "buff_type": "damage_multiplier",
         "value": 1.2,
-        "duration": 15 * 60,
+        "duration": 60 * 60,
     },
     "crit_up": {
         "name": "クリティカル強化",
@@ -86,9 +86,25 @@ SHOP_ITEMS = {
         "value": 1.3,
         "duration": 15 * 60,
     },
+    "decay_guard": {
+        "name": "🛡️ XP減衰ガード",
+        "price": 2500,
+        "description": "購入した日のXP自然減衰を無効化します（1日限定）",
+        "buff_type": "decay_guard",
+        "value": True,
+        "duration": 24 * 60 * 60,
+    },
+    "rankdown_shield": {
+        "name": "🔰 ランクダウン防止シールド",
+        "price": 5000,
+        "description": "次の1回のランクダウンを無効化します（使い切り）",
+        "buff_type": "rankdown_shield",
+        "value": True,
+        "duration": None,
+    },
     "mystery_box": {
         "name": "🎁 ミステリーボックス",
-        "price": 1500,
+        "price": 3000,
         "description": "開けると何かが飛び出す！ランダム報酬ボックス（専用コマンド /openbox で使用）",
         "buff_type": None,
         "value": None,
@@ -561,6 +577,20 @@ async def check_level_down(guild, data, uid):
                 pass
         return
 
+    # 7日連続で条件未満 → ランクダウン防止シールドチェック
+    if info.get("buffs", {}).get("rankdown_shield"):
+        # シールドを消費してランクダウンをキャンセル
+        info["buffs"].pop("rankdown_shield", None)
+        info["level_down_streak"] = 0
+        if notify_channel and member:
+            try:
+                await notify_channel.send(
+                    f"🔰 {member.mention} のランクダウン防止シールドが発動！ランクダウンを1回防ぎました。"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return
+
     # 7日連続で条件未満 → 1レベルダウン
     new_level = max(1, current_level - 1)
     info["level"] = new_level
@@ -678,6 +708,12 @@ async def on_message(message):
         # ストリークボーナスコイン（100 + streak * 20、上限500）
         streak_coins = min(100 + (streak * 20), 500)
         info = ensure_user_data(data, user_id)
+
+        # ログインボーナス2倍チケット適用
+        if info.get("login_bonus_2x"):
+            streak_coins *= 2
+            info["login_bonus_2x"] = False
+
         today_earned = info.get("coin_daily_earned", 0)
         if today_earned < COIN_DAILY_CAP:
             add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
@@ -871,6 +907,11 @@ async def on_voice_state_update(member, before, after):
                 bonus = 500
             else:
                 bonus = 1000
+
+            # ログインボーナス2倍チケット適用
+            if info.get("login_bonus_2x"):
+                bonus *= 2
+                info["login_bonus_2x"] = False
 
             info["xp"] = info.get("xp", 0) + bonus
             info["weekly_xp"] = info.get("weekly_xp", 0) + bonus
@@ -1075,7 +1116,12 @@ async def buy(interaction: discord.Interaction, item_id: str):
         )
         return
 
-    add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
+    # ランクダウン防止シールドは使い切り型（duration不要）
+    if item_id == "rankdown_shield":
+        info.setdefault("buffs", {})
+        info["buffs"]["rankdown_shield"] = {"active": True}
+    else:
+        add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
 
     # 週間コイン消費ランキング用に記録
     info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + item["price"]
@@ -1580,6 +1626,12 @@ async def decay_task():
 
             if is_active_today:
                 # アクティブ日は減衰なし・streak リセット
+                info["level_down_streak"] = 0
+                continue
+
+            # XP減衰ガードが有効なら減衰スキップ
+            cleanup_expired_buffs(info)
+            if info.get("buffs", {}).get("decay_guard"):
                 info["level_down_streak"] = 0
                 continue
 
@@ -3077,16 +3129,23 @@ async def startbattle(interaction: discord.Interaction):
 # =========================
 def draw_mystery_box():
     r = random.random()
-    if r < 0.20:
-        return "lose", None
-    if r < 0.90:
-        reward_type = random.choice(["coins", "xp_boost", "attack_up"])
-        if reward_type == "coins":
-            return "normal", {"type": "coins", "amount": random.randint(500, 2000)}
-        elif reward_type == "xp_boost":
+
+    if r < 0.25:  # ハズレ 25%
+        lose_type = random.choice(["small_coins", "big_lose", "curse", "msg1", "msg2"])
+        return "lose", lose_type
+
+    if r < 0.95:  # 通常 70%
+        reward_type = random.choice(["xp_boost", "attack_up", "coins", "login_bonus_2x"])
+        if reward_type == "xp_boost":
             return "normal", {"type": "xp_boost", "duration": 30 * 60, "value": 2.0}
-        else:
+        elif reward_type == "attack_up":
             return "normal", {"type": "attack_up", "duration": 15 * 60, "value": 1.2}
+        elif reward_type == "coins":
+            return "normal", {"type": "coins", "amount": random.randint(300, 800)}
+        else:
+            return "normal", {"type": "login_bonus_2x"}
+
+    # レア 5%
     rare_type = random.choice(["coins", "boss_slayer", "rare_role"])
     if rare_type == "coins":
         return "rare", {"type": "coins", "amount": 5000}
@@ -3132,19 +3191,34 @@ async def openbox(interaction: discord.Interaction):
 
     rarity, reward = draw_mystery_box()
 
+    # ハズレ処理
     if rarity == "lose":
-        info["coins"] = info.get("coins", 0) + 100
-        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + 100
+        LOSE_PATTERNS = {
+            "small_coins": ("空箱だった…\n\nせめてもの慰めに 💰 **+50コイン** をどうぞ。",    50),
+            "big_lose":    ("完全な空箱だった…！\n\n慰めに 💰 **+100コイン** をどうぞ。",    100),
+            "curse":       ("💀 **呪いのボックス！！**\n\nXPが **-50** 削られてしまった…！", 0),
+            "msg1":        ("ゴロゴロ…カラン…\n\n**何も入っていなかった。** 💰 **+100コイン**", 100),
+            "msg2":        ("箱を開けたら説明書だけ入ってた。\n\n💰 **+100コイン** で許して。", 100),
+        }
+        msg, coin_back = LOSE_PATTERNS[reward]
+
+        if reward == "curse":
+            info["xp"] = max(0, info.get("xp", 0) - 50)
+        else:
+            info["coins"] = info.get("coins", 0) + coin_back
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_back
+
         save_data(guild_id, data)
         embed = discord.Embed(
             title="📦 ミステリーボックスを開けた！",
-            description="空箱だった…\n\nせめてもの慰めに 💰 **+100コイン** をどうぞ。",
+            description=msg,
             color=discord.Color.greyple()
         )
         embed.set_footer(text="次こそはレアが出るかも…？")
         await interaction.response.send_message(embed=embed)
         return
 
+    # 通常・レア報酬付与
     embed_color = discord.Color.gold() if rarity == "normal" else discord.Color.from_rgb(255, 50, 200)
     reward_text = ""
 
@@ -3153,6 +3227,9 @@ async def openbox(interaction: discord.Interaction):
         info["coins"] = info.get("coins", 0) + amount
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + amount
         reward_text = f"💰 **+{amount:,}コイン** 獲得！"
+    elif reward["type"] == "login_bonus_2x":
+        info["login_bonus_2x"] = True
+        reward_text = "🎁 **翌日のログインボーナス2倍チケット** 獲得！\n次回ログイン時に自動適用されます。"
     elif reward["type"] == "xp_boost":
         add_timed_buff(info, "xp_multiplier", reward["value"], reward["duration"], "mystery_xp_boost")
         reward_text = f"⚡ **XPブースト {reward['value']}倍**（30分）獲得！"
