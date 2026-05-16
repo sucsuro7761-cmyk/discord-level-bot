@@ -753,6 +753,11 @@ async def on_message(message):
     data[user_id]["weekly_xp"] += xp_gain
     data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
 
+    # ミッション進捗：メッセージ数・XP獲得
+    info = ensure_user_data(data, user_id)
+    add_mission_progress(info, "msg_count", 1)
+    add_mission_progress(info, "xp_gained", xp_gain)
+
     # クリティカル発生時に通知
     if crit_name:
         try:
@@ -773,6 +778,10 @@ async def on_message(message):
         actual_dmg = int(xp_gain * boss_multi)
         boss["damage"][user_id] = boss["damage"].get(user_id, 0) + actual_dmg
         boss["hp"] = max(0, boss["hp"] - actual_dmg)
+
+        # ミッション進捗：ボスダメージ
+        add_mission_progress(ensure_user_data(data, user_id), "boss_damage", actual_dmg)
+
         if boss["hp"] <= 0:
             boss["active"] = False
             boss["cleared"] += 1
@@ -972,6 +981,11 @@ async def on_voice_state_update(member, before, after):
             data[user_id]["xp"] += gain
             data[user_id]["weekly_xp"] += gain
             data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+
+            # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
+            vc_info_m = ensure_user_data(data, user_id)
+            add_mission_progress(vc_info_m, "vc_minutes", 0.5)
+            add_mission_progress(vc_info_m, "xp_gained", gain)
 
             # VCクリティカル発生時に通知
             if crit_name_vc:
@@ -2245,6 +2259,10 @@ async def chest(interaction: discord.Interaction):
     info["coins"] = info.get("coins", 0) + coin_gain
     info["coin_daily_earned"] = today_earned + coin_gain
     info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_gain
+
+    # ミッション進捗：チェスト回数
+    add_mission_progress(info, "chest_count", 1)
+
     save_data(guild_id, data)
 
     embed = discord.Embed(
@@ -2256,46 +2274,91 @@ async def chest(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# /dailymission（デイリーミッション確認・受取）
+# 曜日別デイリーミッション定義
 # =========================
-@bot.tree.command(name="dailymission", description="デイリーミッション（今日100XP獲得 → 200コイン）")
+# weekday(): 0=月 1=火 2=水 3=木 4=金 5=土 6=日
+DAILY_MISSIONS = {
+    0: {"label": "💬 メッセージを5回送る",       "type": "msg_count",    "goal": 5,   "reward": 100},
+    1: {"label": "💬 メッセージを10回送る",      "type": "msg_count",    "goal": 10,  "reward": 200},
+    2: {"label": "🎙️ VCに30分滞在する",         "type": "vc_minutes",   "goal": 30,  "reward": 200},
+    3: {"label": "⚔️ ボスに300ダメージ与える",   "type": "boss_damage",  "goal": 300, "reward": 500},
+    4: {"label": "🎁 チェストを3回開ける",       "type": "chest_count",  "goal": 3,   "reward": 300},
+    5: {"label": "📈 投資パックを購入する",      "type": "invest_done",  "goal": 1,   "reward": 500},
+    6: {"label": "⭐ XPを500獲得する",           "type": "xp_gained",    "goal": 500, "reward": 300},
+}
+
+def get_today_mission():
+    """今日の曜日のミッションを返す"""
+    weekday = datetime.now(JST).weekday()
+    return DAILY_MISSIONS[weekday]
+
+def get_mission_progress(info, mission_type):
+    """ミッション進捗を返す"""
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    progress = info.get("daily_mission_progress", {})
+    if progress.get("date") != today:
+        return 0
+    return progress.get(mission_type, 0)
+
+def add_mission_progress(info, mission_type, amount=1):
+    """ミッション進捗を加算する"""
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    progress = info.get("daily_mission_progress", {})
+    if progress.get("date") != today:
+        progress = {"date": today}
+    progress[mission_type] = progress.get(mission_type, 0) + amount
+    info["daily_mission_progress"] = progress
+
+# =========================
+# /dailymission（曜日別デイリーミッション確認・受取）
+# =========================
+@bot.tree.command(name="dailymission", description="今日のデイリーミッションを確認・受け取る")
 async def dailymission(interaction: discord.Interaction):
     guild_id = interaction.guild.id
-    user_id = str(interaction.user.id)
-    data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
+    user_id  = str(interaction.user.id)
+    data     = load_data(guild_id)
+    info     = ensure_user_data(data, user_id)
 
-    today = datetime.now(JST).strftime("%Y-%m-%d")
-    mission_claimed = info.get("daily_mission_claimed", "")
-    weekly_chat_xp = info.get("weekly_chat_xp", 0) + info.get("weekly_vc_xp", 0)
+    today    = datetime.now(JST).strftime("%Y-%m-%d")
+    mission  = get_today_mission()
+    m_type   = mission["type"]
+    m_goal   = mission["goal"]
+    m_reward = mission["reward"]
+    m_label  = mission["label"]
 
-    # 今週獲得XP（チャット+VC）で判定
-    today_xp = info.get("today_xp", 0)
-
-    if mission_claimed == today:
+    if info.get("daily_mission_claimed") == today:
         await interaction.response.send_message(
             "✅ 今日のデイリーミッションは既に受け取り済みです！明日また来てね。",
             ephemeral=True
         )
         return
 
-    # 今日のXP獲得量を計算（last_dailyが今日ならOK）
-    last_daily = info.get("last_daily", "")
-    if last_daily != today:
+    progress = get_mission_progress(info, m_type)
+    achieved = progress >= m_goal
+
+    # 木曜ミッション：ボスが不在（討伐済み）なら自動達成
+    if m_type == "boss_damage" and not achieved:
+        boss = load_boss(guild_id)
+        if not boss.get("active"):
+            achieved = True
+            m_label = "⚔️ ボスに300ダメージ与える（今週のボスは討伐済み！）"
+
+    if not achieved:
+        bar_filled = int((min(progress, m_goal) / m_goal) * 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
         embed = discord.Embed(
-            title="🎯 デイリーミッション",
+            title="🎯 今日のデイリーミッション",
             description=(
-                "**今日のミッション**\n"
-                "📝 今日メッセージを送って100XP以上獲得する\n"
-                "💰 達成報酬: **+200コイン**\n\n"
-                "⏳ まだ未達成です。メッセージを送ってXPを貯めよう！"
+                f"**{m_label}**\n\n"
+                f"進捗：`{bar}` {progress:.1f} / {m_goal}\n"
+                f"💰 達成報酬：**{m_reward}コイン**\n\n"
+                f"⏳ まだ未達成です。頑張ろう！"
             ),
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed)
         return
 
-    # 達成済み（今日デイリーボーナスを受け取っている = ログイン済み）
     today_earned = info.get("coin_daily_earned", 0)
     if today_earned >= COIN_DAILY_CAP:
         await interaction.response.send_message(
@@ -2304,15 +2367,20 @@ async def dailymission(interaction: discord.Interaction):
         )
         return
 
-    mission_coins = min(200, COIN_DAILY_CAP - today_earned)
-    info["coins"] = info.get("coins", 0) + mission_coins
-    info["coin_daily_earned"] = today_earned + mission_coins
+    reward_coins = min(m_reward, COIN_DAILY_CAP - today_earned)
+    info["coins"] = info.get("coins", 0) + reward_coins
+    info["coin_daily_earned"] = today_earned + reward_coins
+    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + reward_coins
     info["daily_mission_claimed"] = today
     save_data(guild_id, data)
 
     embed = discord.Embed(
         title="🎯 デイリーミッション達成！",
-        description=f"今日のログインミッション達成！\n💰 **+{mission_coins}コイン** 獲得！",
+        description=(
+            f"**{m_label}**\n\n"
+            f"✅ ミッション達成！\n"
+            f"💰 **+{reward_coins:,}コイン** 獲得！"
+        ),
         color=discord.Color.green()
     )
     await interaction.response.send_message(embed=embed)
@@ -3028,8 +3096,8 @@ async def server_ranking_task():
     await bot.wait_until_ready()
     now = datetime.now(JST)
 
-    # 毎週水曜（weekday=2）15:00に発表
-    if not (now.weekday() == 2 and now.hour == 15 and now.minute == 0):
+    # 毎日15:00に発表
+    if not (now.hour == 15 and now.minute == 0):
         return
 
     date_key = now.strftime("%Y-%m-%d")
@@ -3039,7 +3107,7 @@ async def server_ranking_task():
 
     embed, results = build_server_ranking_embed(
         bot,
-        title="🏆 今週の全サーバー対抗戦 戦況レポート！",
+        title="🏆 本日の全サーバー対抗戦 戦況レポート！",
         color=discord.Color.gold()
     )
     now_str = now.strftime("%Y/%m/%d %H:%M")
@@ -3049,7 +3117,7 @@ async def server_ranking_task():
     top_msg = ""
     if results:
         top_guild, top_xp, _ = results[0]
-        top_msg = f"\n🎉 今週の首位は **{top_guild.name}**！ 総XP **{top_xp:,}**"
+        top_msg = f"\n🎉 現在の首位は **{top_guild.name}**！ 総XP **{top_xp:,}**"
 
     for guild in bot.guilds:
         ch_id = get_level_channel_id(guild.id)
@@ -3102,7 +3170,7 @@ async def startbattle(interaction: discord.Interaction):
         description=(
             "全サーバーの週間XPがリセットされました！\n\n"
             "今ここから新しいバトルが始まります🔥\n"
-            "今週の戦況レポートは **毎週水曜 15:00** に発表されます！\n\n"
+            "今週の戦況レポートは **毎日15:00** に発表されます！\n\n"
             f"`/serverranking` でいつでも現在の順位を確認できます。"
         ),
         color=discord.Color.red()
@@ -3319,6 +3387,9 @@ async def invest(interaction: discord.Interaction):
 
     info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + INVEST_PRICE
     info["investment"] = {"amount": INVEST_PRICE, "invested_at": time.time()}
+
+    # ミッション進捗：投資完了
+    add_mission_progress(info, "invest_done", 1)
     shop_log = load_shop_log(guild_id)
     week_key = datetime.now(JST).strftime("%Y-W%W")
     shop_log.setdefault(week_key, {})
