@@ -2995,11 +2995,28 @@ async def on_guild_join(guild):
 # /announce（全サーバー一斉アナウンス）
 # =========================
 @bot.tree.command(name="announce", description="全サーバーにアナウンスを送信（Bot管理者専用）")
+@discord.app_commands.describe(
+    message="送信するメッセージ内容",
+    mention_type="メンション方法",
+    target="送信先チャンネル",
+)
+@discord.app_commands.choices(
+    mention_type=[
+        discord.app_commands.Choice(name="通常メッセージ（メンションなし）", value="none"),
+        discord.app_commands.Choice(name="@here メンション",                value="here"),
+        discord.app_commands.Choice(name="@everyone メンション",            value="everyone"),
+    ],
+    target=[
+        discord.app_commands.Choice(name="通知チャンネル",         value="notify"),
+        discord.app_commands.Choice(name="bot説明チャンネル",      value="desc"),
+        discord.app_commands.Choice(name="両方",                   value="both"),
+    ]
+)
 async def announce(
     interaction: discord.Interaction,
     message: str,
-    mention_everyone: bool = False,
-    target: str = "notify"  # "notify" or "desc" or "both"
+    mention_type: str = "none",
+    target: str = "notify",
 ):
     if not is_bot_admin(interaction.user.id):
         await interaction.response.send_message(
@@ -3018,9 +3035,15 @@ async def announce(
     embed.set_footer(text=f"送信者: {interaction.user.display_name}")
     embed.timestamp = datetime.now(JST)
 
-    prefix = "@everyone\n" if mention_everyone else ""
+    if mention_type == "everyone":
+        prefix = "@everyone"
+    elif mention_type == "here":
+        prefix = "@here"
+    else:
+        prefix = None
+
     success = 0
-    failed = 0
+    failed  = 0
 
     for guild in bot.guilds:
         channels_to_send = []
@@ -3038,15 +3061,16 @@ async def announce(
 
         for ch in channels_to_send:
             try:
-                await ch.send(prefix, embed=embed)
+                await ch.send(content=prefix, embed=embed)
                 success += 1
             except Exception:
                 failed += 1
 
     await interaction.followup.send(
         f"✅ アナウンス送信完了！\n"
-        f"・成功: {success}チャンネル\n"
-        f"・失敗: {failed}チャンネル",
+        f"・メンション：{mention_type}\n"
+        f"・成功：{success}チャンネル\n"
+        f"・失敗：{failed}チャンネル",
         ephemeral=True
     )
 
