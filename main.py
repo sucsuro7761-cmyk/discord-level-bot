@@ -807,6 +807,18 @@ async def on_message(message):
         else:
             save_event_boss(guild_id, event_boss)
 
+    # 全サーバー共通イベントボスへのダメージ
+    global_boss = load_global_event_boss()
+    if global_boss.get("active"):
+        global_boss["damage"][user_id] = global_boss["damage"].get(user_id, 0) + xp_gain
+        global_boss["hp"] = max(0, global_boss["hp"] - xp_gain)
+        if global_boss["hp"] <= 0:
+            global_boss["active"] = False
+            save_global_event_boss(global_boss)
+            await handle_global_event_boss_clear(global_boss)
+        else:
+            save_global_event_boss(global_boss)
+
     await bot.process_commands(message)
 
 # =========================
@@ -1785,6 +1797,22 @@ async def weekly_mid_announcement():
 # =========================
 # イベントボス read/write
 # =========================
+GLOBAL_EVENT_BOSS_FILE = os.path.join(DATA_DIR, "global_event_boss.json")
+
+def load_global_event_boss():
+    if os.path.exists(GLOBAL_EVENT_BOSS_FILE):
+        with open(GLOBAL_EVENT_BOSS_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                pass
+    return {"active": False, "hp": 0, "max_hp": 0, "name": "", "damage": {}, "boost_days": 7, "boost_multiplier": 3}
+
+def save_global_event_boss(boss):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(GLOBAL_EVENT_BOSS_FILE, "w", encoding="utf-8") as f:
+        json.dump(boss, f, ensure_ascii=False, indent=2)
+
 def load_event_boss(guild_id):
     path = event_boss_file(guild_id)
     if not os.path.exists(path):
@@ -1870,8 +1898,60 @@ async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplie
         embed.set_footer(text="全員で力を合わせて倒せ！")
         await notify_channel.send("@everyone", embed=embed)
 
+async def handle_global_event_boss_clear(boss):
+    """全サーバー共通イベントボス討伐処理"""
+    boss_name   = boss.get("name", "大魔王")
+    boost_multi = boss.get("boost_multiplier", 3)
+    boost_days  = boss.get("boost_days", 7)
+
+    # 全サーバーに討伐通知・ブースト付与
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+
+        # XPブースト付与
+        set_time_boost(guild.id, boost_multi)
+
+        # 討伐者ロール付与（そのサーバーのメンバーのみ）
+        role = discord.utils.get(guild.roles, name=EVENT_BOSS_CLEAR_ROLE)
+        if not role:
+            try:
+                role = await guild.create_role(
+                    name=EVENT_BOSS_CLEAR_ROLE,
+                    color=discord.Color.from_rgb(255, 215, 0),
+                    reason="全サーバーイベントボス討伐"
+                )
+            except discord.Forbidden:
+                role = None
+
+        data = load_data(guild.id)
+        for uid, dmg in boss["damage"].items():
+            if dmg <= 0:
+                continue
+            member = guild.get_member(int(uid))
+            if member and role:
+                try:
+                    await member.add_roles(role)
+                except discord.Forbidden:
+                    pass
+
+        if notify_channel:
+            embed = discord.Embed(
+                title=f"🎉 全サーバー共闘 討伐成功！【{boss_name}】",
+                description=(
+                    f"全サーバーが力を合わせて **{boss_name}** を倒した！\n\n"
+                    f"🎁 全サーバーのXPが **{boost_multi}倍**（{boost_days}日間）になります！\n"
+                    f"`{EVENT_BOSS_CLEAR_ROLE}` ロールを獲得！"
+                ),
+                color=discord.Color.gold()
+            )
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+
 # =========================
-# イベントボス：クリア処理
 # =========================
 async def handle_event_boss_clear(guild, event_boss):
     gid = guild.id
@@ -2620,118 +2700,87 @@ async def setuproles_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 # =========================
-# /boss コマンド
-# =========================
-@bot.tree.command(name="boss", description="今週のボス状況を確認")
-async def boss_status(interaction: discord.Interaction):
-    boss = load_boss(interaction.guild.id)
-
-    if not boss.get("active"):
-        await interaction.response.send_message("現在ボスは出現していません。月曜6時に出現します！")
-        return
-
-    max_hp = boss.get("max_hp", 1)
-    current_hp = boss.get("hp", 0)
-    progress = (max_hp - current_hp) / max_hp
-    filled = int(20 * progress)
-    bar = "█" * filled + "░" * (20 - filled)
-    percent = int(progress * 100)
-
-    user_id = str(interaction.user.id)
-    my_dmg = boss["damage"].get(user_id, 0)
-
-    sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
-    top_text = ""
-    medals = ["🥇", "🥈", "🥉"]
-    for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
-        top_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
-    if not top_text:
-        top_text = "まだ誰も攻撃していません！"
-
-    embed = discord.Embed(
-        title=f"👹 週ボス状況 - Week {boss.get('week', 1)}",
-        color=discord.Color.red()
-    )
-    embed.add_field(name="❤️ ボスHP", value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}", inline=False)
-    embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
-    embed.add_field(name="⚔️ あなたのダメージ", value=f"{my_dmg}ダメージ", inline=False)
-    await interaction.response.send_message(embed=embed)
-
 # =========================
 # /eventboss コマンド群
 # =========================
-eventboss_group = discord.app_commands.Group(name="eventboss", description="イベントボス管理")
+# =========================
+# /allservereventboss（bot管理者専用・全サーバー共通イベントボス）
+# =========================
+allservereventboss_group = discord.app_commands.Group(
+    name="allservereventboss",
+    description="全サーバー共通イベントボス管理（bot管理者専用）"
+)
 
-@eventboss_group.command(name="start", description="イベントボスを手動で出現させる（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
-async def eventboss_start(
+@allservereventboss_group.command(name="start", description="全サーバー共通イベントボスを召喚（bot管理者専用）")
+@discord.app_commands.describe(
+    name="ボスの名前",
+    hp="ボスのHP",
+    days="開催期間（日）",
+    boost="討伐後のXPブースト倍率",
+)
+async def allservereventboss_start(
     interaction: discord.Interaction,
     name: str = "大魔王",
-    hp: int = 150000,
+    hp: int = 500000,
     days: int = 7,
-    boost: int = 3
+    boost: int = 3,
 ):
-    gid = interaction.guild.id
-    event_boss = load_event_boss(gid)
-    if event_boss.get("active"):
-        await interaction.response.send_message("⚠️ すでにイベントボスが出現中です！", ephemeral=True)
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはbot管理者のみ使用できます。", ephemeral=True)
         return
-    await interaction.response.send_message(
-        f"✅ イベントボス【{name}】を召喚します！\nHP: {hp:,} / 期間: {days}日 / ブースト: {boost}倍",
+
+    global_boss = load_global_event_boss()
+    if global_boss.get("active"):
+        await interaction.response.send_message("⚠️ 既に全サーバーイベントボスが出現中です！", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    new_boss = {
+        "active":           True,
+        "name":             name,
+        "hp":               hp,
+        "max_hp":           hp,
+        "damage":           {},
+        "boost_days":       days,
+        "boost_multiplier": boost,
+    }
+    save_global_event_boss(new_boss)
+
+    # 全サーバーに出現通知
+    success = 0
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            embed = discord.Embed(
+                title=f"🌐🚨 全サーバー共闘イベント！【{name}】出現！",
+                description=(
+                    f"**全サーバー合同で倒すボス**が現れた！\n\n"
+                    f"メッセージを送るだけで自動攻撃！\n"
+                    f"どのサーバーのメンバーでも参加できます！\n\n"
+                    f"討伐成功で全サーバーのXPが **{boost}倍**（{days}日間）になります！"
+                ),
+                color=discord.Color.from_rgb(255, 50, 50)
+            )
+            embed.add_field(name="❤️ HP",     value=f"{hp:,}")
+            embed.add_field(name="📅 期間",    value=f"{days}日間")
+            embed.add_field(name="🎁 報酬",    value=f"XP **{boost}倍** + `{EVENT_BOSS_CLEAR_ROLE}` ロール", inline=False)
+            embed.set_footer(text="全サーバーで力を合わせて倒せ！")
+            try:
+                await notify_channel.send("@everyone", embed=embed)
+                success += 1
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    await interaction.followup.send(
+        f"✅ 全サーバーイベントボス【{name}】を召喚しました！\n"
+        f"HP: {hp:,} / 期間: {days}日 / ブースト: {boost}倍\n"
+        f"通知送信：{success}サーバー",
         ephemeral=True
     )
-    await spawn_event_boss(interaction.guild, name, hp=hp, days=days, boost_multiplier=boost)
 
-@eventboss_group.command(name="status", description="イベントボスの状況を確認")
-async def eventboss_status(interaction: discord.Interaction):
-    event_boss = load_event_boss(interaction.guild.id)
-    if not event_boss.get("active"):
-        clears = event_boss.get("consecutive_clears", 0)
-        await interaction.response.send_message(
-            f"現在イベントボスは出現していません。\n"
-            f"通常ボス累計クリア数: **{clears}回** / 発動条件: **{EVENT_BOSS_CONSECUTIVE_CLEARS}回**",
-            ephemeral=True
-        )
-        return
-
-    max_hp = event_boss.get("max_hp", 1)
-    current_hp = event_boss.get("hp", 0)
-    progress = (max_hp - current_hp) / max_hp
-    filled = int(20 * progress)
-    bar = "█" * filled + "░" * (20 - filled)
-    percent = int(progress * 100)
-
-    user_id = str(interaction.user.id)
-    my_dmg = event_boss["damage"].get(user_id, 0)
-
-    sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
-    top_text = ""
-    medals = ["🥇", "🥈", "🥉"]
-    for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
-        top_text += f"{medals[i]} <@{uid}> - {dmg:,}ダメージ\n"
-    if not top_text:
-        top_text = "まだ誰も攻撃していません！"
-
-    boss_name = event_boss.get("name", "大魔王")
-    embed = discord.Embed(
-        title=f"🚨 イベントボス【{boss_name}】状況",
-        color=discord.Color.from_rgb(255, 100, 0)
-    )
-    embed.add_field(name="❤️ ボスHP", value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}", inline=False)
-    embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
-    embed.add_field(name="⚔️ あなたのダメージ", value=f"{my_dmg:,}ダメージ", inline=False)
-    await interaction.response.send_message(embed=embed)
-
-@eventboss_group.command(name="setname", description="次のイベントボスの名前を設定（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
-async def eventboss_setname(interaction: discord.Interaction, name: str):
-    gid = interaction.guild.id
-    event_boss = load_event_boss(gid)
-    event_boss["name"] = name
-    save_event_boss(gid, event_boss)
-    await interaction.response.send_message(f"✅ 次のイベントボス名を **{name}** に設定しました！", ephemeral=True)
-
-bot.tree.add_command(eventboss_group)
+bot.tree.add_command(allservereventboss_group)
 
 # =========================
 # サーバー参加時：ロール＆チャンネル自動作成
@@ -3256,7 +3305,7 @@ def draw_mystery_box():
 # =========================
 _openbox_cooldowns = {}
 
-@bot.tree.command(name="openbox", description="🎁 ミステリーボックスを購入して開ける（1500コイン）")
+@bot.tree.command(name="openbox", description="🎁 ミステリーボックスを購入して開ける（3000コイン）")
 async def openbox(interaction: discord.Interaction):
     guild_id = interaction.guild.id
     user_id  = str(interaction.user.id)
@@ -3756,13 +3805,13 @@ async def bosstats(interaction: discord.Interaction):
     boss     = load_boss(guild_id)
     data     = load_data(guild_id)
 
-    cleared   = boss.get("cleared", 0)
-    active    = boss.get("active", False)
+    cleared    = boss.get("cleared", 0)
+    active     = boss.get("active", False)
     current_hp = boss.get("hp", 0)
-    max_hp    = boss.get("max_hp", 0)
+    max_hp     = boss.get("max_hp", 0)
 
     # 最多貢献者
-    damage_dict = boss.get("damage", {})
+    damage_dict      = boss.get("damage", {})
     top_contributors = sorted(damage_dict.items(), key=lambda x: x[1], reverse=True)[:3]
 
     medals = ["🥇", "🥈", "🥉"]
@@ -3772,7 +3821,7 @@ async def bosstats(interaction: discord.Interaction):
         name   = member.display_name if member else f"ID:{uid}"
         contrib_lines.append(f"{medals[i]} **{name}** … {dmg:,}ダメージ")
 
-    # ボス状況
+    # 通常ボス状況
     if active and max_hp > 0:
         hp_pct  = current_hp / max_hp * 100
         bar_len = int((1 - current_hp / max_hp) * 20)
@@ -3781,17 +3830,78 @@ async def bosstats(interaction: discord.Interaction):
     else:
         boss_status = "😴 現在ボスは出現していません"
 
-    embed = discord.Embed(
-        title="⚔️ ボス討伐統計",
-        color=discord.Color.red()
-    )
+    embed = discord.Embed(title="⚔️ ボス討伐統計", color=discord.Color.red())
     embed.add_field(name="✅ 累計討伐回数", value=f"**{cleared}回**", inline=True)
-    embed.add_field(name="📍 現在の状況",   value=boss_status, inline=False)
+    embed.add_field(name="📍 通常ボス状況", value=boss_status, inline=False)
     embed.add_field(
         name="🏆 今週の貢献者TOP3",
         value="\n".join(contrib_lines) if contrib_lines else "まだデータなし",
         inline=False
     )
+
+    # イベントボスセクション
+    event_boss = load_event_boss(guild_id)
+    if event_boss.get("active"):
+        eb_max_hp = event_boss.get("max_hp", 1)
+        eb_hp     = event_boss.get("hp", 0)
+        eb_pct    = eb_hp / eb_max_hp * 100
+        eb_bar    = "█" * int((1 - eb_hp / eb_max_hp) * 20) + "░" * int(eb_hp / eb_max_hp * 20)
+        eb_name   = event_boss.get("name", "大魔王")
+
+        eb_top = sorted(event_boss.get("damage", {}).items(), key=lambda x: x[1], reverse=True)[:3]
+        eb_lines = []
+        for i, (uid, dmg) in enumerate(eb_top):
+            member = interaction.guild.get_member(int(uid))
+            name   = member.display_name if member else f"ID:{uid}"
+            eb_lines.append(f"{medals[i]} **{name}** … {dmg:,}ダメージ")
+
+        embed.add_field(
+            name=f"🚨 イベントボス【{eb_name}】",
+            value=(
+                f"HP：`{eb_bar}` {eb_hp:,}/{eb_max_hp:,}（残り{eb_pct:.1f}%）\n"
+                + ("\n".join(eb_lines) if eb_lines else "まだ誰も攻撃していません")
+            ),
+            inline=False
+        )
+    else:
+        clears = event_boss.get("consecutive_clears", 0)
+        embed.add_field(
+            name="🚨 イベントボス",
+            value=f"現在出現していません\n通常ボス累計討伐：**{clears}回** / 発動条件：**{EVENT_BOSS_CONSECUTIVE_CLEARS}回**",
+            inline=False
+        )
+
+    # 全サーバー共通イベントボスセクション
+    global_boss = load_global_event_boss()
+    if global_boss.get("active"):
+        gb_max  = global_boss.get("max_hp", 1)
+        gb_hp   = global_boss.get("hp", 0)
+        gb_pct  = gb_hp / gb_max * 100
+        gb_bar  = "█" * int((1 - gb_hp / gb_max) * 20) + "░" * int(gb_hp / gb_max * 20)
+        gb_name = global_boss.get("name", "大魔王")
+
+        gb_top = sorted(global_boss.get("damage", {}).items(), key=lambda x: x[1], reverse=True)[:3]
+        gb_lines = []
+        for i, (uid, dmg) in enumerate(gb_top):
+            member   = interaction.guild.get_member(int(uid))
+            name_str = member.display_name if member else f"ID:{uid}"
+            gb_lines.append(f"{medals[i]} **{name_str}** … {dmg:,}ダメージ")
+
+        embed.add_field(
+            name=f"🌐 全サーバー共闘ボス【{gb_name}】",
+            value=(
+                f"HP：`{gb_bar}` {gb_hp:,}/{gb_max:,}（残り{gb_pct:.1f}%）\n"
+                + ("\n".join(gb_lines) if gb_lines else "まだ誰も攻撃していません")
+            ),
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🌐 全サーバー共闘ボス",
+            value="現在出現していません",
+            inline=False
+        )
+
     await interaction.response.send_message(embed=embed)
 
 
