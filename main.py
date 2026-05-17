@@ -1047,6 +1047,18 @@ async def on_voice_state_update(member, before, after):
                 else:
                     save_event_boss(guild_id, event_boss)
 
+            # 全サーバー共闘ボスへのダメージ
+            global_boss = load_global_event_boss()
+            if global_boss.get("active"):
+                global_boss["damage"][user_id] = global_boss["damage"].get(user_id, 0) + gain
+                global_boss["hp"] = max(0, global_boss["hp"] - gain)
+                if global_boss["hp"] <= 0:
+                    global_boss["active"] = False
+                    save_global_event_boss(global_boss)
+                    await handle_global_event_boss_clear(global_boss)
+                else:
+                    save_global_event_boss(global_boss)
+
     if before.channel and not after.channel:
         vc_users[ck] = False
         vc_afk_flags.pop(ck, None)
