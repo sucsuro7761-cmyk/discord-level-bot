@@ -768,6 +768,11 @@ async def on_message(message):
             pass
 
     await check_level_up(message.author, data, user_id)
+
+    # 時間帯別アクティブ記録（/peakhours用）
+    hour_key = f"hour_{datetime.now(JST).hour}"
+    data[user_id][hour_key] = data[user_id].get(hour_key, 0) + 1
+
     save_data(guild_id, data)
 
     boss = load_boss(guild_id)
@@ -3661,8 +3666,187 @@ async def rates(interaction: discord.Interaction):
 
 
 # =========================
-# 起動時
+# /levelstats（レベル分布）
 # =========================
+@bot.tree.command(name="levelstats", description="サーバーのレベル分布を表示")
+async def levelstats(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    data = load_data(guild_id)
+
+    bands = [
+        ("Lv1〜29   MEMBER Lite", 1,    29),
+        ("Lv30〜99  MEMBER",      30,   99),
+        ("Lv100〜199 CORE",       100,  199),
+        ("Lv200〜499 SELECT",     200,  499),
+        ("Lv500〜999 PREMIUM",    500,  999),
+        ("Lv1000〜   Legend",     1000, 99999),
+    ]
+
+    counts = {label: 0 for label, _, _ in bands}
+    total  = 0
+
+    for uid, info in data.items():
+        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+            continue
+        lv = info.get("level", 1)
+        total += 1
+        for label, lo, hi in bands:
+            if lo <= lv <= hi:
+                counts[label] += 1
+                break
+
+    lines = []
+    for label, _, _ in bands:
+        count = counts[label]
+        pct   = (count / total * 100) if total > 0 else 0
+        bar   = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+        lines.append(f"`{label}`\n　{bar} **{count}人** ({pct:.1f}%)")
+
+    embed = discord.Embed(
+        title="📊 レベル分布",
+        description="\n\n".join(lines) if lines else "データなし",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"総ユーザー数：{total}人")
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /peakhours（時間帯別アクティブ分析）
+# =========================
+@bot.tree.command(name="peakhours", description="メッセージが多い時間帯TOP5を表示")
+async def peakhours(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    data = load_data(guild_id)
+
+    hour_totals = [0] * 24
+    for uid, info in data.items():
+        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+            continue
+        for h in range(24):
+            hour_totals[h] += info.get(f"hour_{h}", 0)
+
+    ranked = sorted(enumerate(hour_totals), key=lambda x: x[1], reverse=True)
+
+    medals = ["🥇", "🥈", "🥉", "`4.`", "`5.`"]
+    lines  = []
+    for i, (hour, count) in enumerate(ranked[:5]):
+        if count == 0:
+            break
+        medal     = medals[i]
+        bar_len   = int(count / max(hour_totals) * 20) if max(hour_totals) > 0 else 0
+        bar       = "█" * bar_len + "░" * (20 - bar_len)
+        lines.append(f"{medal} **{hour:02d}:00〜{hour:02d}:59**\n　{bar} {count:,}メッセージ")
+
+    embed = discord.Embed(
+        title="⏰ 時間帯別アクティブ TOP5（JST）",
+        description="\n\n".join(lines) if lines else "まだデータがありません。",
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text="全期間の累計メッセージ数で集計")
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /bosstats（ボス討伐統計）
+# =========================
+@bot.tree.command(name="bosstats", description="ボスの討伐統計を表示")
+async def bosstats(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    boss     = load_boss(guild_id)
+    data     = load_data(guild_id)
+
+    cleared   = boss.get("cleared", 0)
+    active    = boss.get("active", False)
+    current_hp = boss.get("hp", 0)
+    max_hp    = boss.get("max_hp", 0)
+
+    # 最多貢献者
+    damage_dict = boss.get("damage", {})
+    top_contributors = sorted(damage_dict.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    medals = ["🥇", "🥈", "🥉"]
+    contrib_lines = []
+    for i, (uid, dmg) in enumerate(top_contributors):
+        member = interaction.guild.get_member(int(uid))
+        name   = member.display_name if member else f"ID:{uid}"
+        contrib_lines.append(f"{medals[i]} **{name}** … {dmg:,}ダメージ")
+
+    # ボス状況
+    if active and max_hp > 0:
+        hp_pct  = current_hp / max_hp * 100
+        bar_len = int((1 - current_hp / max_hp) * 20)
+        hp_bar  = "█" * bar_len + "░" * (20 - bar_len)
+        boss_status = f"⚔️ **討伐中！**\nHP：`{hp_bar}` {current_hp:,}/{max_hp:,}（残り{hp_pct:.1f}%）"
+    else:
+        boss_status = "😴 現在ボスは出現していません"
+
+    embed = discord.Embed(
+        title="⚔️ ボス討伐統計",
+        color=discord.Color.red()
+    )
+    embed.add_field(name="✅ 累計討伐回数", value=f"**{cleared}回**", inline=True)
+    embed.add_field(name="📍 現在の状況",   value=boss_status, inline=False)
+    embed.add_field(
+        name="🏆 今週の貢献者TOP3",
+        value="\n".join(contrib_lines) if contrib_lines else "まだデータなし",
+        inline=False
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+# =========================
+# /xpstats（全サーバー平均日次XP統計・bot管理者専用）
+# =========================
+@bot.tree.command(name="xpstats", description="【bot管理者専用】全サーバーの1人あたり平均日次XPを表示")
+async def xpstats(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはbot管理者のみ使用できます。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # 週7日で割って1日平均を算出
+    DAYS_IN_WEEK = 7
+    all_server_avgs = []
+    lines = []
+
+    for guild in bot.guilds:
+        data = load_data(guild.id)
+        weekly_xp_list = [
+            info.get("weekly_xp", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("weekly_xp", 0) > 0
+        ]
+        if not weekly_xp_list:
+            lines.append(f"**{guild.name}** … データなし")
+            continue
+
+        user_count   = len(weekly_xp_list)
+        total_weekly = sum(weekly_xp_list)
+        avg_daily    = total_weekly / DAYS_IN_WEEK / user_count
+
+        all_server_avgs.append(avg_daily)
+        lines.append(
+            f"**{guild.name}**\n"
+            f"　アクティブ人数：{user_count}人 ／ 1人あたり平均：**{avg_daily:,.1f} XP/日**"
+        )
+
+    # 全サーバー総合平均
+    if all_server_avgs:
+        global_avg = sum(all_server_avgs) / len(all_server_avgs)
+        global_text = f"**{global_avg:,.1f} XP/日**"
+    else:
+        global_text = "データなし"
+
+    embed = discord.Embed(
+        title="📊 全サーバー 1人あたり平均日次XP",
+        description="\n".join(lines) if lines else "データなし",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="🌐 全サーバー総合平均", value=global_text, inline=False)
+    embed.set_footer(text="週間XP ÷ 7日 ÷ アクティブ人数で算出（今週分）")
+    await interaction.followup.send(embed=embed, ephemeral=True)
 @bot.event
 async def on_ready():
     synced = await bot.tree.sync()
