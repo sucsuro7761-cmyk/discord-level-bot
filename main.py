@@ -496,10 +496,13 @@ async def update_rank_role(member, level):
 
     if current_rank_role == target_role:
         return
-    if current_rank_role:
-        await member.remove_roles(current_rank_role)
-    if target_role:
-        await member.add_roles(target_role)
+    try:
+        if current_rank_role:
+            await member.remove_roles(current_rank_role)
+        if target_role:
+            await member.add_roles(target_role)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 # =========================
 # Level-up check
@@ -4062,7 +4065,10 @@ async def on_ready():
                 continue
             member = guild.get_member(int(user_id))
             if member:
-                await update_rank_role(member, info.get("level", 1))
+                try:
+                    await update_rank_role(member, info.get("level", 1))
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
                 await asyncio.sleep(0.5)
 
 # =========================
