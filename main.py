@@ -542,9 +542,12 @@ async def check_level_up(member, data, user_id):
             role_name = permanent_roles[new_level]
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
-                await member.add_roles(role)
-                if notify_channel:
-                    await notify_channel.send(f"📸 {role_name} を獲得しました！")
+                try:
+                    await member.add_roles(role)
+                    if notify_channel:
+                        await notify_channel.send(f"📸 {role_name} を獲得しました！")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
 async def check_level_down(guild, data, uid):
     """
@@ -1594,7 +1597,10 @@ async def weekly_ranking_task():
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 for member in role.members:
-                    await member.remove_roles(role)
+                    try:
+                        await member.remove_roles(role)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
         weekly_coin_rewards = {1: 3000, 2: 2000, 3: 1000}
         text = ""
@@ -1602,7 +1608,10 @@ async def weekly_ranking_task():
             role = discord.utils.get(guild.roles, name=weekly_roles[i])
             member = guild.get_member(int(user_id))
             if role and member:
-                await member.add_roles(role)
+                try:
+                    await member.add_roles(role)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             coin_r = weekly_coin_rewards.get(i, 0)
             info["coins"] = info.get("coins", 0) + coin_r
             info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_r
@@ -1993,7 +2002,10 @@ async def handle_event_boss_clear(guild, event_boss):
             continue
         member = guild.get_member(int(uid))
         if member and role:
-            await member.add_roles(role)
+            try:
+                await member.add_roles(role)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     # MVPランキング
     sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
