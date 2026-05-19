@@ -481,18 +481,30 @@ weekly_roles = {
 async def update_rank_role(member, level):
     guild = member.guild
 
-    target_role = None
-    for min_lv, max_lv, role_name in rank_roles:
-        if min_lv <= level <= max_lv:
-            target_role = discord.utils.get(guild.roles, name=role_name)
-            break
-
+    # 現在のランクロールを取得
     current_rank_role = None
     for role in member.roles:
         for _, _, r_name in rank_roles:
             if role.name == r_name:
                 current_rank_role = role
                 break
+
+    # 目標ランクロールを取得（なければ自動作成）
+    target_role = None
+    for min_lv, max_lv, role_name in rank_roles:
+        if min_lv <= level <= max_lv:
+            target_role = discord.utils.get(guild.roles, name=role_name)
+            if not target_role:
+                try:
+                    target_role = await guild.create_role(
+                        name=role_name,
+                        reason="ランクロール自動作成"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    target_role = None
+            break
+
+    print(f"[RANK] {member.display_name} | Lv{level} | guild={guild.name} | {current_rank_role} → {target_role}")
 
     if current_rank_role == target_role:
         return
@@ -501,8 +513,9 @@ async def update_rank_role(member, level):
             await member.remove_roles(current_rank_role)
         if target_role:
             await member.add_roles(target_role)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+        print(f"[RANK] 付与成功: {target_role}")
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[RANK] 付与失敗: {e}")
 
 # =========================
 # Level-up check
