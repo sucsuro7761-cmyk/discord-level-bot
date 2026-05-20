@@ -4085,16 +4085,8 @@ async def on_ready():
                 print(f"[{guild.name}] レベル通知チャンネルを自動登録しました (ID: {existing.id})")
 
         data = load_data(guild.id)
-        for user_id, info in data.items():
-            if user_id == LAST_DECAY_KEY:
-                continue
-            member = guild.get_member(int(user_id))
-            if member:
-                try:
-                    await update_rank_role(member, info.get("level", 1))
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-                await asyncio.sleep(0.5)
+        # on_readyでの一括ロール更新は403エラーの原因になるためスキップ
+        # ロール更新はメッセージ送信・レベルアップ時に個別に行う
 
 # =========================
 # Run
