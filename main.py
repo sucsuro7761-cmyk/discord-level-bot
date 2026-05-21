@@ -222,6 +222,19 @@ _boss_spawn_announced = {} # { guild_id: date_str }
 BOSS_BASE_HP = 30000
 BOSS_HP_SCALE = 1.2
 
+def find_member_globally(bot, user_id: int):
+    """全サーバーからメンバーを検索して返す。見つからなければNone。"""
+    for guild in bot.guilds:
+        member = guild.get_member(user_id)
+        if member:
+            return member
+    return None
+
+def get_member_name(bot, uid: str) -> str:
+    """uidからメンバー名を取得。全サーバーから探し、見つからなければID表示。"""
+    member = find_member_globally(bot, int(uid))
+    return member.display_name if member else f"ID:{uid}"
+
 def get_boss_clear_role_name(cleared: int) -> str:
     """討伐回数からロール名を生成（LV〇〇ボス討伐者）"""
     return f"⚔️ LV{cleared}ボス討伐者"
@@ -468,12 +481,7 @@ weekly_roles = {
 async def update_rank_role(member, level):
     guild = member.guild
 
-    target_role = None
-    for min_lv, max_lv, role_name in rank_roles:
-        if min_lv <= level <= max_lv:
-            target_role = discord.utils.get(guild.roles, name=role_name)
-            break
-
+    # 現在のランクロールを取得
     current_rank_role = None
     for role in member.roles:
         for _, _, r_name in rank_roles:
@@ -481,12 +489,30 @@ async def update_rank_role(member, level):
                 current_rank_role = role
                 break
 
+    # 目標ランクロールを取得（なければ自動作成）
+    target_role = None
+    for min_lv, max_lv, role_name in rank_roles:
+        if min_lv <= level <= max_lv:
+            target_role = discord.utils.get(guild.roles, name=role_name)
+            if not target_role:
+                try:
+                    target_role = await guild.create_role(
+                        name=role_name,
+                        reason="ランクロール自動作成"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    target_role = None
+            break
+
     if current_rank_role == target_role:
         return
-    if current_rank_role:
-        await member.remove_roles(current_rank_role)
-    if target_role:
-        await member.add_roles(target_role)
+    try:
+        if current_rank_role:
+            await member.remove_roles(current_rank_role)
+        if target_role:
+            await member.add_roles(target_role)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[RANK ERROR] サーバー：{member.guild.name} | ユーザー：{member.display_name} | Lv{level} | {current_rank_role} → {target_role} | エラー：{e}")
 
 # =========================
 # Level-up check
@@ -526,9 +552,12 @@ async def check_level_up(member, data, user_id):
             role_name = permanent_roles[new_level]
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
-                await member.add_roles(role)
-                if notify_channel:
-                    await notify_channel.send(f"📸 {role_name} を獲得しました！")
+                try:
+                    await member.add_roles(role)
+                    if notify_channel:
+                        await notify_channel.send(f"📸 {role_name} を獲得しました！")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
 async def check_level_down(guild, data, uid):
     """
@@ -1578,7 +1607,10 @@ async def weekly_ranking_task():
             role = discord.utils.get(guild.roles, name=role_name)
             if role:
                 for member in role.members:
-                    await member.remove_roles(role)
+                    try:
+                        await member.remove_roles(role)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
         weekly_coin_rewards = {1: 3000, 2: 2000, 3: 1000}
         text = ""
@@ -1586,7 +1618,10 @@ async def weekly_ranking_task():
             role = discord.utils.get(guild.roles, name=weekly_roles[i])
             member = guild.get_member(int(user_id))
             if role and member:
-                await member.add_roles(role)
+                try:
+                    await member.add_roles(role)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             coin_r = weekly_coin_rewards.get(i, 0)
             info["coins"] = info.get("coins", 0) + coin_r
             info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_r
@@ -1977,7 +2012,10 @@ async def handle_event_boss_clear(guild, event_boss):
             continue
         member = guild.get_member(int(uid))
         if member and role:
-            await member.add_roles(role)
+            try:
+                await member.add_roles(role)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     # MVPランキング
     sorted_dmg = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
@@ -3159,8 +3197,8 @@ def get_server_weekly_xp(guild):
     )
     return total, active_members
 
-def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキング", color=discord.Color.gold()):
-    """全サーバーのランキングEmbedを生成"""
+def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキング", color=discord.Color.gold(), current_guild=None):
+    """全サーバーのランキングEmbedを生成。current_guild指定時は自サーバーの順位・差分も表示。"""
     results = []
     for guild in bot.guilds:
         total_xp, active = get_server_weekly_xp(guild)
@@ -3172,12 +3210,45 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
     desc = ""
     for i, (guild, total_xp, active) in enumerate(results, start=1):
         medal = medals[i - 1] if i <= 3 else f"`{i}.`"
-        desc += f"{medal} **{guild.name}**\n　　総XP：**{total_xp:,}** ／ 参加人数：{active}人\n"
+
+        # 次順位との差分
+        if i == 1:
+            diff_text = "👑 現在首位！"
+        else:
+            prev_xp   = results[i - 2][1]
+            diff      = prev_xp - total_xp
+            diff_text = f"次の順位まで **{diff:,} XP**！"
+
+        desc += f"{medal} **{guild.name}**\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:
         desc = "データがありません。"
 
     embed = discord.Embed(title=title, description=desc, color=color)
+
+    # 自サーバーがTOP10圏外の場合に追記
+    if current_guild:
+        own_rank  = next((i + 1 for i, (g, _, _) in enumerate(results) if g.id == current_guild.id), None)
+        own_xp    = next((xp for g, xp, _ in results if g.id == current_guild.id), 0)
+        own_active = next((a for g, _, a in results if g.id == current_guild.id), 0)
+
+        if own_rank and own_rank > 10:
+            if own_rank == 1:
+                own_diff_text = "👑 現在首位！"
+            else:
+                prev_xp   = results[own_rank - 2][1]
+                diff      = prev_xp - own_xp
+                own_diff_text = f"次の順位まで **{diff:,} XP**！"
+
+            embed.add_field(
+                name=f"📍 {current_guild.name} の順位",
+                value=(
+                    f"`{own_rank}位` ／ 総XP：**{own_xp:,}** ／ {own_active}人\n"
+                    f"{own_diff_text}"
+                ),
+                inline=False
+            )
+
     embed.set_footer(text="集計期間：今週（月曜リセット）")
     return embed, results
 
@@ -3203,16 +3274,19 @@ async def server_ranking_task():
     now_str = now.strftime("%Y/%m/%d %H:%M")
     embed.set_footer(text=f"集計時刻：{now_str} JST ／ 集計期間：今週（月曜リセット）")
 
-    # 1位サーバーの追加メッセージ
-    top_msg = ""
-    if results:
-        top_guild, top_xp, _ = results[0]
-        top_msg = f"\n🎉 現在の首位は **{top_guild.name}**！ 総XP **{top_xp:,}**"
-
     for guild in bot.guilds:
         ch_id = get_level_channel_id(guild.id)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
         if notify_channel:
+            embed, results = build_server_ranking_embed(
+                bot,
+                title="🏆 本日の全サーバー対抗戦 戦況レポート！",
+                color=discord.Color.gold(),
+                current_guild=guild
+            )
+            now_str = datetime.now(JST).strftime("%Y/%m/%d %H:%M")
+            embed.set_footer(text=f"集計時刻：{now_str} JST ／ 集計期間：今週（月曜リセット）")
+            top_msg = f"\n🎉 現在の首位は **{results[0][0].name}**！ 総XP **{results[0][1]:,}**" if results else ""
             try:
                 await notify_channel.send(content=top_msg if top_msg else None, embed=embed)
             except (discord.Forbidden, discord.HTTPException):
@@ -3220,7 +3294,7 @@ async def server_ranking_task():
 
 @bot.tree.command(name="serverranking", description="全サーバーの今週のXPランキングを表示")
 async def serverranking(interaction: discord.Interaction):
-    embed, _ = build_server_ranking_embed(bot)
+    embed, _ = build_server_ranking_embed(bot, current_guild=interaction.guild)
     await interaction.response.send_message(embed=embed)
 
 
@@ -3735,11 +3809,13 @@ async def levelstats(interaction: discord.Interaction):
     data = load_data(guild_id)
 
     bands = [
-        ("Lv1〜29   MEMBER Lite", 1,    29),
-        ("Lv30〜99  MEMBER",      30,   99),
-        ("Lv100〜199 CORE",       100,  199),
-        ("Lv200〜499 SELECT",     200,  499),
-        ("Lv500〜999 PREMIUM",    500,  999),
+        ("Lv1〜9    MEMBER Lite", 1,    9),
+        ("Lv10〜29  MEMBER",      10,   29),
+        ("Lv30〜49  CORE",        30,   49),
+        ("Lv50〜74  SELECT",      50,   74),
+        ("Lv75〜99  PREMIUM",     75,   99),
+        ("Lv100〜199 VIP Lite",   100,  199),
+        ("Lv200〜999 VIP",        200,  999),
         ("Lv1000〜   Legend",     1000, 99999),
     ]
 
@@ -3829,8 +3905,7 @@ async def bosstats(interaction: discord.Interaction):
     medals = ["🥇", "🥈", "🥉"]
     contrib_lines = []
     for i, (uid, dmg) in enumerate(top_contributors):
-        member = interaction.guild.get_member(int(uid))
-        name   = member.display_name if member else f"ID:{uid}"
+        name = get_member_name(bot, uid)
         contrib_lines.append(f"{medals[i]} **{name}** … {dmg:,}ダメージ")
 
     # 通常ボス状況
@@ -3844,12 +3919,14 @@ async def bosstats(interaction: discord.Interaction):
 
     embed = discord.Embed(title="⚔️ ボス討伐統計", color=discord.Color.red())
     embed.add_field(name="✅ 累計討伐回数", value=f"**{cleared}回**", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="📍 通常ボス状況", value=boss_status, inline=False)
     embed.add_field(
         name="🏆 今週の貢献者TOP3",
         value="\n".join(contrib_lines) if contrib_lines else "まだデータなし",
         inline=False
     )
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
 
     # イベントボスセクション
     event_boss = load_event_boss(guild_id)
@@ -3863,8 +3940,7 @@ async def bosstats(interaction: discord.Interaction):
         eb_top = sorted(event_boss.get("damage", {}).items(), key=lambda x: x[1], reverse=True)[:3]
         eb_lines = []
         for i, (uid, dmg) in enumerate(eb_top):
-            member = interaction.guild.get_member(int(uid))
-            name   = member.display_name if member else f"ID:{uid}"
+            name = get_member_name(bot, uid)
             eb_lines.append(f"{medals[i]} **{name}** … {dmg:,}ダメージ")
 
         embed.add_field(
@@ -3876,12 +3952,19 @@ async def bosstats(interaction: discord.Interaction):
             inline=False
         )
     else:
-        clears = event_boss.get("consecutive_clears", 0)
+        clears      = event_boss.get("consecutive_clears", 0)
+        next_trigger = ((clears // EVENT_BOSS_CONSECUTIVE_CLEARS) + 1) * EVENT_BOSS_CONSECUTIVE_CLEARS
+        remaining   = next_trigger - clears
         embed.add_field(
             name="🚨 イベントボス",
-            value=f"現在出現していません\n通常ボス累計討伐：**{clears}回** / 発動条件：**{EVENT_BOSS_CONSECUTIVE_CLEARS}回**",
+            value=(
+                f"現在出現していません\n"
+                f"累計討伐：**{clears}回** ／ 次の発動まであと **{remaining}回**"
+            ),
             inline=False
         )
+
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
 
     # 全サーバー共通イベントボスセクション
     global_boss = load_global_event_boss()
@@ -3895,8 +3978,7 @@ async def bosstats(interaction: discord.Interaction):
         gb_top = sorted(global_boss.get("damage", {}).items(), key=lambda x: x[1], reverse=True)[:3]
         gb_lines = []
         for i, (uid, dmg) in enumerate(gb_top):
-            member   = interaction.guild.get_member(int(uid))
-            name_str = member.display_name if member else f"ID:{uid}"
+            name_str = get_member_name(bot, uid)
             gb_lines.append(f"{medals[i]} **{name_str}** … {dmg:,}ダメージ")
 
         embed.add_field(
@@ -4000,13 +4082,8 @@ async def on_ready():
                 print(f"[{guild.name}] レベル通知チャンネルを自動登録しました (ID: {existing.id})")
 
         data = load_data(guild.id)
-        for user_id, info in data.items():
-            if user_id == LAST_DECAY_KEY:
-                continue
-            member = guild.get_member(int(user_id))
-            if member:
-                await update_rank_role(member, info.get("level", 1))
-                await asyncio.sleep(0.5)
+        # on_readyでの一括ロール更新は403エラーの原因になるためスキップ
+        # ロール更新はメッセージ送信・レベルアップ時に個別に行う
 
 # =========================
 # Run
