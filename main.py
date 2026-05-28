@@ -573,7 +573,7 @@ async def check_level_up(member, data, user_id):
                 try:
                     await member.add_roles(role)
                     if notify_channel:
-                        await notify_channel.send(f"📸 {role_name} を獲得しました！")
+                        await notify_channel.send(f"📸 {member.mention} が **{role_name}** を獲得しました！")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -854,7 +854,7 @@ async def on_message(message):
         else:
             save_event_boss(guild_id, event_boss)
 
-    # 全サーバー共通イベントボスへのダメージ
+    # サーバーリンクボスへのダメージ
     global_boss = load_global_event_boss()
     if global_boss.get("active"):
         global_boss["damage"][user_id] = global_boss["damage"].get(user_id, 0) + xp_gain
@@ -1094,7 +1094,7 @@ async def on_voice_state_update(member, before, after):
                 else:
                     save_event_boss(guild_id, event_boss)
 
-            # 全サーバー共闘ボスへのダメージ
+            # サーバーリンクボスへのダメージ
             global_boss = load_global_event_boss()
             if global_boss.get("active"):
                 global_boss["damage"][user_id] = global_boss["damage"].get(user_id, 0) + gain
@@ -1984,7 +1984,7 @@ async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplie
         await notify_channel.send("@everyone", embed=embed)
 
 async def handle_global_event_boss_clear(boss):
-    """全サーバー共通イベントボス討伐処理"""
+    """サーバーリンクボス討伐処理"""
     boss_name   = boss.get("name", "大魔王")
     boost_multi = boss.get("boost_multiplier", 3)
     boost_days  = boss.get("boost_days", 7)
@@ -2004,7 +2004,7 @@ async def handle_global_event_boss_clear(boss):
                 role = await guild.create_role(
                     name=EVENT_BOSS_CLEAR_ROLE,
                     color=discord.Color.from_rgb(255, 215, 0),
-                    reason="全サーバーイベントボス討伐"
+                    reason="サーバーリンクボス討伐"
                 )
             except discord.Forbidden:
                 role = None
@@ -2022,9 +2022,9 @@ async def handle_global_event_boss_clear(boss):
 
         if notify_channel:
             embed = discord.Embed(
-                title=f"🎉 全サーバー共闘 討伐成功！【{boss_name}】",
+                title=f"🎉 サーバーリンクボス 討伐成功！【{boss_name}】",
                 description=(
-                    f"全サーバーが力を合わせて **{boss_name}** を倒した！\n\n"
+                    f"サーバーリンクボスに参加したメンバーが力を合わせて **{boss_name}** を倒した！\n\n"
                     f"🎁 全サーバーのXPが **{boost_multi}倍**（{boost_days}日間）になります！\n"
                     f"`{EVENT_BOSS_CLEAR_ROLE}` ロールを獲得！"
                 ),
@@ -2330,7 +2330,7 @@ async def boss_spawn_task():
             await notify_channel.send(embed=embed)
 
 # =========================
-# 週ボス：ダメージ報告（0時・6時・12時・18時）
+# 週ボス：ダメージ報告（8時・16時・24時）
 # =========================
 _boss_report_fired = {}  # { "YYYY-MM-DD_HH": True }
 
@@ -2339,7 +2339,7 @@ async def boss_damage_report():
     await bot.wait_until_ready()
 
     now = datetime.now(JST)
-    if now.hour not in [0, 6, 12, 18] or now.minute != 0:
+    if now.hour not in [8, 16, 0] or now.minute != 0:
         return
 
     fire_key = now.strftime("%Y-%m-%d_%H")
@@ -2353,42 +2353,86 @@ async def boss_damage_report():
         if key.split("_")[0] < today:
             del _boss_report_fired[key]
 
+    medals = ["🥇", "🥈", "🥉"]
+
     for guild in bot.guilds:
         gid = guild.id
-        boss = load_boss(gid)
-        if not boss.get("active"):
-            continue
-
         ch_id = get_level_channel_id(gid)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
         if not notify_channel:
             continue
 
-        max_hp = boss.get("max_hp", 1)
-        current_hp = boss.get("hp", 0)
-        progress = (max_hp - current_hp) / max_hp
-        filled = int(20 * progress)
-        bar = "█" * filled + "░" * (20 - filled)
-        percent = int(progress * 100)
+        embeds = []
 
-        sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
-        top_text = ""
-        medals = ["🥇", "🥈", "🥉"]
-        for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
-            top_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
+        # ① 通常ボス
+        boss = load_boss(gid)
+        if boss.get("active"):
+            max_hp     = boss.get("max_hp", 1)
+            current_hp = boss.get("hp", 0)
+            progress   = (max_hp - current_hp) / max_hp
+            bar        = "█" * int(20 * progress) + "░" * (20 - int(20 * progress))
+            percent    = int(progress * 100)
 
-        if not top_text:
-            top_text = "まだ誰も攻撃していません！"
+            sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
+            top_text   = "\n".join(
+                f"{medals[i]} <@{uid}> - {dmg:,}ダメージ"
+                for i, (uid, dmg) in enumerate(sorted_dmg[:3])
+            ) or "まだ誰も攻撃していません！"
 
-        embed = discord.Embed(title="⚔️ 週ボス ダメージレポート", color=discord.Color.orange())
-        embed.add_field(
-            name="❤️ ボスHP",
-            value=f"{bar} {percent}%\n{current_hp:,} / {max_hp:,}",
-            inline=False
-        )
-        embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
-        embed.set_footer(text="メッセージを送って攻撃しよう！")
-        await notify_channel.send(embed=embed)
+            embed = discord.Embed(title=f"⚔️ 週ボス ダメージレポート（Week {boss.get('week', 1)}）", color=discord.Color.orange())
+            embed.add_field(name="❤️ ボスHP", value=f"`{bar}` {percent}%\n{current_hp:,} / {max_hp:,}", inline=False)
+            embed.add_field(name="🏆 ダメージTOP3", value=top_text, inline=False)
+            embed.set_footer(text="メッセージを送って攻撃しよう！")
+            embeds.append(embed)
+
+        # ② サーバー個別イベントボス
+        event_boss = load_event_boss(gid)
+        if event_boss.get("active"):
+            eb_max  = event_boss.get("max_hp", 1)
+            eb_hp   = event_boss.get("hp", 0)
+            eb_pct  = int((eb_max - eb_hp) / eb_max * 100)
+            eb_bar  = "█" * int((eb_max - eb_hp) / eb_max * 20) + "░" * int(eb_hp / eb_max * 20)
+            eb_name = event_boss.get("name", "大魔王")
+
+            eb_sorted = sorted(event_boss["damage"].items(), key=lambda x: x[1], reverse=True)
+            eb_top    = "\n".join(
+                f"{medals[i]} <@{uid}> - {dmg:,}ダメージ"
+                for i, (uid, dmg) in enumerate(eb_sorted[:3])
+            ) or "まだ誰も攻撃していません！"
+
+            embed = discord.Embed(title=f"🚨 イベントボス【{eb_name}】ダメージレポート", color=discord.Color.from_rgb(255, 100, 0))
+            embed.add_field(name="❤️ HP", value=f"`{eb_bar}` {eb_pct}%\n{eb_hp:,} / {eb_max:,}", inline=False)
+            embed.add_field(name="🏆 ダメージTOP3", value=eb_top, inline=False)
+            embed.set_footer(text="全員で力を合わせて倒せ！")
+            embeds.append(embed)
+
+        # ③ サーバーリンクボス
+        global_boss = load_global_event_boss()
+        if global_boss.get("active"):
+            gb_max  = global_boss.get("max_hp", 1)
+            gb_hp   = global_boss.get("hp", 0)
+            gb_pct  = int((gb_max - gb_hp) / gb_max * 100)
+            gb_bar  = "█" * int((gb_max - gb_hp) / gb_max * 20) + "░" * int(gb_hp / gb_max * 20)
+            gb_name = global_boss.get("name", "大魔王")
+
+            gb_sorted = sorted(global_boss["damage"].items(), key=lambda x: x[1], reverse=True)
+            gb_top    = "\n".join(
+                f"{medals[i]} {get_member_name(bot, uid)} - {dmg:,}ダメージ"
+                for i, (uid, dmg) in enumerate(gb_sorted[:3])
+            ) or "まだ誰も攻撃していません！"
+
+            embed = discord.Embed(title=f"🌐 サーバーリンクボス【{gb_name}】ダメージレポート", color=discord.Color.purple())
+            embed.add_field(name="❤️ HP", value=f"`{gb_bar}` {gb_pct}%\n{gb_hp:,} / {gb_max:,}", inline=False)
+            embed.add_field(name="🏆 ダメージTOP3", value=gb_top, inline=False)
+            embed.set_footer(text="全サーバーで力を合わせて倒せ！")
+            embeds.append(embed)
+
+        # まとめて送信
+        for embed in embeds:
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 
 # =========================
@@ -2792,14 +2836,14 @@ async def setuproles_error(interaction: discord.Interaction, error):
 # /eventboss コマンド群
 # =========================
 # =========================
-# /allservereventboss（bot管理者専用・全サーバー共通イベントボス）
+# /allservereventboss（bot管理者専用・サーバーリンクボス）
 # =========================
 allservereventboss_group = discord.app_commands.Group(
     name="allservereventboss",
-    description="全サーバー共通イベントボス管理（bot管理者専用）"
+    description="サーバーリンクボス管理（bot管理者専用）"
 )
 
-@allservereventboss_group.command(name="start", description="全サーバー共通イベントボスを召喚（bot管理者専用）")
+@allservereventboss_group.command(name="start", description="サーバーリンクボスを召喚（bot管理者専用）")
 @discord.app_commands.describe(
     name="ボスの名前",
     hp="ボスのHP",
@@ -2819,7 +2863,7 @@ async def allservereventboss_start(
 
     global_boss = load_global_event_boss()
     if global_boss.get("active"):
-        await interaction.response.send_message("⚠️ 既に全サーバーイベントボスが出現中です！", ephemeral=True)
+        await interaction.response.send_message("⚠️ 既にサーバーリンクボスが出現中です！", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -2842,7 +2886,7 @@ async def allservereventboss_start(
         notify_channel = guild.get_channel(ch_id) if ch_id else None
         if notify_channel:
             embed = discord.Embed(
-                title=f"🌐🚨 全サーバー共闘イベント！【{name}】出現！",
+                title=f"🌐🚨 サーバーリンクボスイベント！【{name}】出現！",
                 description=(
                     f"**全サーバー合同で倒すボス**が現れた！\n\n"
                     f"メッセージを送るだけで自動攻撃！\n"
@@ -2862,7 +2906,7 @@ async def allservereventboss_start(
                 pass
 
     await interaction.followup.send(
-        f"✅ 全サーバーイベントボス【{name}】を召喚しました！\n"
+        f"✅ サーバーリンクボス【{name}】を召喚しました！\n"
         f"HP: {hp:,} / 期間: {days}日 / ブースト: {boost}倍\n"
         f"通知送信：{success}サーバー",
         ephemeral=True
@@ -3537,9 +3581,6 @@ async def openbox(interaction: discord.Interaction):
 # =========================
 # 投資パック定数・抽選
 # =========================
-INVEST_PRICE    = 3000
-INVEST_DURATION = 24 * 60 * 60
-
 INVEST_TABLE = [
     (0.5, 0.40, "大暴落…",       "📉"),
     (1.0, 0.35, "元本割れなし",  "📊"),
@@ -3559,12 +3600,32 @@ def draw_investment():
 # =========================
 # /invest（投資パック購入）
 # =========================
-@bot.tree.command(name="invest", description="📈 3000コインを投資！24時間後に /claiminvest で回収")
-async def invest(interaction: discord.Interaction):
+INVEST_MIN    = 500
+INVEST_MAX    = 50000
+INVEST_STEP   = 500
+INVEST_DURATION = 24 * 60 * 60
+
+@bot.tree.command(name="invest", description="📈 コインを投資！500コイン単位で設定可（24時間後に /claiminvest で回収）")
+@discord.app_commands.describe(amount="投資額（500コイン単位・500〜50,000コイン）")
+async def invest(interaction: discord.Interaction, amount: int = 3000):
     guild_id = interaction.guild.id
     user_id  = str(interaction.user.id)
     data = load_data(guild_id)
     info = ensure_user_data(data, user_id)
+
+    # バリデーション
+    if amount % INVEST_STEP != 0:
+        await interaction.response.send_message(
+            f"❌ 投資額は **{INVEST_STEP:,}コイン単位** で指定してください。\n例：500・1000・3000・10000",
+            ephemeral=True
+        )
+        return
+    if amount < INVEST_MIN or amount > INVEST_MAX:
+        await interaction.response.send_message(
+            f"❌ 投資額は **{INVEST_MIN:,}〜{INVEST_MAX:,}コイン** の範囲で指定してください。",
+            ephemeral=True
+        )
+        return
 
     inv = info.get("investment")
     if inv:
@@ -3581,14 +3642,14 @@ async def invest(interaction: discord.Interaction):
             )
         return
 
-    if not spend_coins(data, user_id, INVEST_PRICE, "buy_investment_pack"):
+    if not spend_coins(data, user_id, amount, "buy_investment_pack"):
         await interaction.response.send_message(
-            f"コインが足りません。\n必要: **{INVEST_PRICE:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
+            f"コインが足りません。\n必要: **{amount:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
         )
         return
 
-    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + INVEST_PRICE
-    info["investment"] = {"amount": INVEST_PRICE, "invested_at": time.time()}
+    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + amount
+    info["investment"] = {"amount": amount, "invested_at": time.time()}
 
     # ミッション進捗：投資完了
     add_mission_progress(info, "invest_done", 1)
@@ -3601,9 +3662,14 @@ async def invest(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="📈 投資完了！",
-        description=f"**{INVEST_PRICE:,}コイン** を投資しました！\n\n24時間後に `/claiminvest` で結果を確認してください。\n運命は…神のみぞ知る🎲",
+        description=(
+            f"**{amount:,}コイン** を投資しました！\n\n"
+            f"24時間後に `/claiminvest` で結果を確認してください。\n"
+            f"運命は…神のみぞ知る🎲"
+        ),
         color=discord.Color.blue()
     )
+    embed.set_footer(text=f"投資額：{amount:,}コイン ／ 期待値：約×1.025")
     await interaction.response.send_message(embed=embed)
 
 # =========================
@@ -4096,7 +4162,7 @@ async def bosstats(interaction: discord.Interaction):
 
     embed.add_field(name="\u200b", value="\u200b", inline=False)
 
-    # 全サーバー共通イベントボスセクション
+    # サーバーリンクボスセクション
     global_boss = load_global_event_boss()
     if global_boss.get("active"):
         gb_max  = global_boss.get("max_hp", 1)
@@ -4112,7 +4178,7 @@ async def bosstats(interaction: discord.Interaction):
             gb_lines.append(f"{medals[i]} **{name_str}** … {dmg:,}ダメージ")
 
         embed.add_field(
-            name=f"🌐 全サーバー共闘ボス【{gb_name}】",
+            name=f"🌐 サーバーリンクボス【{gb_name}】",
             value=(
                 f"HP：`{gb_bar}` {gb_hp:,}/{gb_max:,}（残り{gb_pct:.1f}%）\n"
                 + ("\n".join(gb_lines) if gb_lines else "まだ誰も攻撃していません")
@@ -4121,7 +4187,7 @@ async def bosstats(interaction: discord.Interaction):
         )
     else:
         embed.add_field(
-            name="🌐 全サーバー共闘ボス",
+            name="🌐 サーバーリンクボス",
             value="現在出現していません",
             inline=False
         )
