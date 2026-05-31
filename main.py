@@ -121,7 +121,7 @@ SHOP_ITEMS = {
     "investment_pack": {
         "name": "📈 投資パック",
         "price": 3000,
-        "description": "3000コインを投資！24時間後に /claiminvest で回収（専用コマンドで購入）",
+        "description": "500〜50,000コインを投資！24時間後に /claiminvest で回収（専用コマンド /invest で購入）",
         "buff_type": None,
         "value": None,
         "duration": None,
@@ -145,10 +145,10 @@ SHOP_ITEMS = {
 
 CRIT_TABLE_TEXT = [
     # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
-    ("超+CT", 0.001,  0.000005,  50, "💥"),
-    ("超CT",  0.005,  0.00001,  25, "⚡"),
-    ("CT",    0.03,   0.0001,   10, "🔥"),
-    ("ミニCT",0.05,   0.0005,    5, "✨"),
+    ("超+CT", 0.001,  0.0005,  50, "💥"),
+    ("超CT",  0.005,  0.0025,  25, "⚡"),
+    ("CT",    0.03,   0.015,   10, "🔥"),
+    ("ミニCT",0.05,   0.025,    5, "✨"),
 ]
 
 CRIT_TABLE_VC = [
@@ -1772,7 +1772,115 @@ async def decay_task():
                         except (discord.Forbidden, discord.HTTPException):
                             pass
 
-        # XP減衰後にランクダウンチェック
+        save_data(gid, data)
+
+# =========================
+# サーバーリンクボス 期間終了チェックタスク
+# =========================
+@tasks.loop(minutes=1)
+async def server_link_boss_expiry_task():
+    await bot.wait_until_ready()
+    global_boss = load_global_event_boss()
+    if not global_boss.get("active"):
+        return
+
+    end_at = global_boss.get("end_at", 0)
+    if end_at and time.time() < end_at:
+        return
+
+    # 期間終了 → 未討伐のまま終了
+    global_boss["active"] = False
+    save_global_event_boss(global_boss)
+
+    boss_name = global_boss.get("name", "大魔王")
+    max_hp    = global_boss.get("max_hp", 0)
+    hp        = global_boss.get("hp", 0)
+    pct       = int((max_hp - hp) / max_hp * 100) if max_hp > 0 else 0
+
+    medals   = ["🥇", "🥈", "🥉"]
+    top3     = sorted(global_boss.get("damage", {}).items(), key=lambda x: x[1], reverse=True)[:3]
+    top_text = "\n".join(
+        f"{medals[i]} {get_member_name(bot, uid)} … {dmg:,}ダメージ"
+        for i, (uid, dmg) in enumerate(top3)
+    ) or "なし"
+
+    embed = discord.Embed(
+        title=f"⏰ サーバーリンクボス【{boss_name}】開催終了",
+        description=(
+            f"開催期間が終了しました。討伐ならず…\n\n"
+            f"残りHP：**{hp:,} / {max_hp:,}**（**{pct}%** 削った！）\n\n"
+            f"**最終貢献者TOP3**\n{top_text}"
+        ),
+        color=discord.Color.greyple()
+    )
+
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+# =========================
+# デイリーミッション朝7時通知タスク
+# =========================
+_daily_mission_announced = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def daily_mission_announce_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+    if not (now.hour == 7 and now.minute == 0):
+        return
+    today = now.strftime("%Y-%m-%d")
+    if _daily_mission_announced.get(today):
+        return
+    _daily_mission_announced[today] = True
+
+    mission  = get_today_mission()
+    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+    weekday  = weekdays[now.weekday()]
+
+    embed = discord.Embed(
+        title=f"🌅 今日のデイリーミッション（{weekday}曜日）",
+        description=(
+            f"**{mission['label']}**\n\n"
+            f"💰 達成報酬：**{mission['reward']:,}コイン**\n\n"
+            f"`/dailymission` で達成確認・受け取りができます！"
+        ),
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text="毎日達成してコインを貯めよう！")
+
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+# =========================
+_rankdown_check_fired = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def rankdown_check_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+    if not (now.hour == 18 and now.minute == 0):
+        return
+    today = now.strftime("%Y-%m-%d")
+    if _rankdown_check_fired.get(today):
+        return
+    _rankdown_check_fired[today] = True
+
+    for guild in bot.guilds:
+        gid = guild.id
+        data = load_data(gid)
+        if not data:
+            continue
         for uid in list(data.keys()):
             if uid == LAST_DECAY_KEY:
                 continue
@@ -2849,6 +2957,7 @@ allservereventboss_group = discord.app_commands.Group(
     hp="ボスのHP",
     days="開催期間（日）",
     boost="討伐後のXPブースト倍率",
+    boost_days="討伐後のXPブースト期間（日）※省略時はdaysと同じ",
 )
 async def allservereventboss_start(
     interaction: discord.Interaction,
@@ -2856,6 +2965,7 @@ async def allservereventboss_start(
     hp: int = 500000,
     days: int = 7,
     boost: int = 3,
+    boost_days: int = None,
 ):
     if not is_bot_admin(interaction.user.id):
         await interaction.response.send_message("❌ このコマンドはbot管理者のみ使用できます。", ephemeral=True)
@@ -2868,14 +2978,17 @@ async def allservereventboss_start(
 
     await interaction.response.defer(ephemeral=True)
 
+    actual_boost_days = boost_days if boost_days is not None else days
+
     new_boss = {
         "active":           True,
         "name":             name,
         "hp":               hp,
         "max_hp":           hp,
         "damage":           {},
-        "boost_days":       days,
+        "boost_days":       actual_boost_days,
         "boost_multiplier": boost,
+        "end_at":           time.time() + days * 24 * 60 * 60,
     }
     save_global_event_boss(new_boss)
 
@@ -2896,8 +3009,8 @@ async def allservereventboss_start(
                 color=discord.Color.from_rgb(255, 50, 50)
             )
             embed.add_field(name="❤️ HP",     value=f"{hp:,}")
-            embed.add_field(name="📅 期間",    value=f"{days}日間")
-            embed.add_field(name="🎁 報酬",    value=f"XP **{boost}倍** + `{EVENT_BOSS_CLEAR_ROLE}` ロール", inline=False)
+            embed.add_field(name="📅 開催期間",    value=f"{days}日間")
+            embed.add_field(name="🎁 報酬",    value=f"XP **{boost}倍**（{actual_boost_days}日間） + `{EVENT_BOSS_CLEAR_ROLE}` ロール", inline=False)
             embed.set_footer(text="全サーバーで力を合わせて倒せ！")
             try:
                 await notify_channel.send("@everyone", embed=embed)
@@ -2907,7 +3020,7 @@ async def allservereventboss_start(
 
     await interaction.followup.send(
         f"✅ サーバーリンクボス【{name}】を召喚しました！\n"
-        f"HP: {hp:,} / 期間: {days}日 / ブースト: {boost}倍\n"
+        f"HP: {hp:,} ／ 開催期間: {days}日 ／ ブースト: {boost}倍 × {actual_boost_days}日間\n"
         f"通知送信：{success}サーバー",
         ephemeral=True
     )
@@ -4267,6 +4380,12 @@ async def on_ready():
         boss_damage_report.start()
     if not server_ranking_task.is_running():
         server_ranking_task.start()
+    if not rankdown_check_task.is_running():
+        rankdown_check_task.start()
+    if not daily_mission_announce_task.is_running():
+        daily_mission_announce_task.start()
+    if not server_link_boss_expiry_task.is_running():
+        server_link_boss_expiry_task.start()
 
     # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
