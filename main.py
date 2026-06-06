@@ -655,6 +655,89 @@ async def check_level_down(guild, data, uid):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+async def give_streak_mystery_box(member, guild, channel, streak):
+    """7の倍数連続ログイン時にミステリーボックスを自動開封して結果を送信"""
+    guild_id = str(guild.id)
+    user_id  = str(member.id)
+    data     = load_data(guild.id)
+    info     = ensure_user_data(data, user_id)
+
+    rarity, reward = draw_mystery_box()
+
+    LOSE_PATTERNS = {
+        "small_coins": ("空箱だった…\n\nせめてもの慰めに 💰 **+50コイン** をどうぞ。",    50),
+        "big_lose":    ("完全な空箱だった…！\n\n慰めに 💰 **+100コイン** をどうぞ。",    100),
+        "curse":       ("💀 **呪いのボックス！！**\n\nXPが **-50** 削られてしまった…！", 0),
+        "msg1":        ("ゴロゴロ…カラン…\n\n**何も入っていなかった。** 💰 **+100コイン**", 100),
+        "msg2":        ("箱を開けたら説明書だけ入ってた。\n\n💰 **+100コイン** で許して。", 100),
+    }
+
+    if rarity == "lose":
+        msg, coin_back = LOSE_PATTERNS[reward]
+        if reward == "curse":
+            info["xp"] = max(0, info.get("xp", 0) - 50)
+        else:
+            info["coins"] = info.get("coins", 0) + coin_back
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_back
+        save_data(guild.id, data)
+        embed = discord.Embed(
+            title=f"🎁 {streak}日連続ログイン！ミステリーボックスプレゼント！",
+            description=f"{member.mention}\n\n{msg}",
+            color=discord.Color.greyple()
+        )
+        embed.set_footer(text=f"🔥 {streak}日連続ログインおめでとう！")
+    else:
+        embed_color = discord.Color.gold() if rarity == "normal" else discord.Color.from_rgb(255, 50, 200)
+        reward_text = ""
+
+        if reward["type"] == "coins":
+            amount = reward["amount"]
+            info["coins"] = info.get("coins", 0) + amount
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + amount
+            reward_text = f"💰 **+{amount:,}コイン** 獲得！"
+        elif reward["type"] == "login_bonus_2x":
+            info["login_bonus_2x"] = True
+            reward_text = "🎁 **翌日のログインボーナス2倍チケット** 獲得！"
+        elif reward["type"] == "xp_boost":
+            add_timed_buff(info, "xp_multiplier", reward["value"], reward["duration"], "mystery_xp_boost")
+            reward_text = f"⚡ **XPブースト {reward['value']}倍**（30分）獲得！"
+        elif reward["type"] == "attack_up":
+            add_timed_buff(info, "damage_multiplier", reward["value"], reward["duration"], "mystery_attack")
+            reward_text = f"⚔️ **攻撃力アップ {reward['value']}倍**（15分）獲得！"
+        elif reward["type"] == "boss_slayer":
+            add_timed_buff(info, "boss_damage_multiplier", reward["value"], reward["duration"], "mystery_boss")
+            reward_text = f"🗡️ **ボス特効 {reward['value']}倍**（30分）獲得！"
+        elif reward["type"] == "rare_role":
+            role_name = "🎁 ミステリー当選者"
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                try:
+                    role = await guild.create_role(
+                        name=role_name,
+                        color=discord.Color.from_rgb(255, 215, 0),
+                        reason="ミステリーボックス レア称号"
+                    )
+                except discord.Forbidden:
+                    role = None
+            if role:
+                try:
+                    await member.add_roles(role)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            reward_text = f"👑 **レア称号「{role_name}」** を獲得！"
+
+        save_data(guild.id, data)
+
+        title  = f"🌟✨ {streak}日連続！レア報酬！！ ✨🌟" if rarity == "rare" else f"🎁 {streak}日連続ログイン！ミステリーボックスプレゼント！"
+        prefix = f"🎊 {member.mention} おめでとうございます！！\n\n" if rarity == "rare" else f"{member.mention}\n\n"
+        embed  = discord.Embed(title=title, description=f"{prefix}{reward_text}", color=embed_color)
+        embed.set_footer(text=f"🔥 {streak}日連続ログインおめでとう！")
+
+    try:
+        await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
 # =========================
 # =========================
 @bot.event
@@ -783,6 +866,10 @@ async def on_message(message):
             f"{message.author.mention} **+{bonus}XP**{coin_msg} "
             f"（連続{streak}日目）"
         )
+
+        # 7の倍数連続ログインでミステリーボックスプレゼント
+        if streak % 7 == 0:
+            await give_streak_mystery_box(message.author, message.guild, message.channel, streak)
 
     boost = get_boost(guild_id)
 
@@ -1002,6 +1089,10 @@ async def on_voice_state_update(member, before, after):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
+            # 7の倍数連続ログインでミステリーボックスプレゼント
+            if streak % 7 == 0 and notify_channel:
+                await give_streak_mystery_box(member, member.guild, notify_channel, streak)
+
         while vc_users.get(ck):
             await asyncio.sleep(30)
             vc_xp_elapsed += 30
@@ -1030,9 +1121,12 @@ async def on_voice_state_update(member, before, after):
             data[user_id].setdefault("last_daily", "")
             data[user_id].setdefault("weekly_xp", 0)
 
+            if not member.voice or not member.voice.channel:
+                break
+
             boost = get_boost(guild_id)
             # ミュート中は2XP、ミュート解除（発言中）は15XP
-            is_muted = member.voice.self_mute or member.voice.mute
+            is_muted = member.voice.self_mute or member.voice.mute if member.voice else True
             base_xp_vc = 2 if is_muted else 15
 
             # VCクリティカル判定（テキストの半分の確率）
@@ -2102,10 +2196,7 @@ async def handle_global_event_boss_clear(boss):
         ch_id = get_level_channel_id(guild.id)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-        # XPブースト付与
-        set_time_boost(guild.id, boost_multi)
-
-        # 討伐者ロール付与（そのサーバーのメンバーのみ）
+        # 討伐者ロール付与（条件チェックあり）
         role = discord.utils.get(guild.roles, name=EVENT_BOSS_CLEAR_ROLE)
         if not role:
             try:
@@ -2118,23 +2209,39 @@ async def handle_global_event_boss_clear(boss):
                 role = None
 
         data = load_data(guild.id)
+        reward_xp       = boss.get("reward_xp", 0)
+        boost_duration  = boost_days * 24 * 60 * 60
+
         for uid, dmg in boss["damage"].items():
             if dmg <= 0:
                 continue
+            # 報酬条件チェック
+            if reward_xp > 0 and dmg < reward_xp:
+                continue
             member = guild.get_member(int(uid))
+
+            # ロール付与
             if member and role:
                 try:
                     await member.add_roles(role)
                 except discord.Forbidden:
                     pass
 
+            # 個人XPブースト付与
+            info = ensure_user_data(data, uid)
+            add_timed_buff(info, "xp_multiplier", float(boost_multi), boost_duration, "server_link_boss")
+
+        save_data(guild.id, data)
+
         if notify_channel:
+            reward_xp   = boss.get("reward_xp", 0)
+            reward_cond = f"\n⚠️ 受取条件：**{reward_xp:,}ダメージ以上** 与えたメンバーのみ" if reward_xp > 0 else ""
             embed = discord.Embed(
                 title=f"🎉 サーバーリンクボス 討伐成功！【{boss_name}】",
                 description=(
                     f"サーバーリンクボスに参加したメンバーが力を合わせて **{boss_name}** を倒した！\n\n"
                     f"🎁 全サーバーのXPが **{boost_multi}倍**（{boost_days}日間）になります！\n"
-                    f"`{EVENT_BOSS_CLEAR_ROLE}` ロールを獲得！"
+                    f"`{EVENT_BOSS_CLEAR_ROLE}` ロールを獲得！{reward_cond}"
                 ),
                 color=discord.Color.gold()
             )
@@ -2958,6 +3065,7 @@ allservereventboss_group = discord.app_commands.Group(
     days="開催期間（日）",
     boost="討伐後のXPブースト倍率",
     boost_days="討伐後のXPブースト期間（日）※省略時はdaysと同じ",
+    reward_xp="報酬受取条件：討伐期間中に必要な最低ダメージ量（0=全員対象）",
 )
 async def allservereventboss_start(
     interaction: discord.Interaction,
@@ -2966,6 +3074,7 @@ async def allservereventboss_start(
     days: int = 7,
     boost: int = 3,
     boost_days: int = None,
+    reward_xp: int = 0,
 ):
     if not is_bot_admin(interaction.user.id):
         await interaction.response.send_message("❌ このコマンドはbot管理者のみ使用できます。", ephemeral=True)
@@ -2989,6 +3098,7 @@ async def allservereventboss_start(
         "boost_days":       actual_boost_days,
         "boost_multiplier": boost,
         "end_at":           time.time() + days * 24 * 60 * 60,
+        "reward_xp":        reward_xp,
     }
     save_global_event_boss(new_boss)
 
@@ -3004,13 +3114,16 @@ async def allservereventboss_start(
                     f"**全サーバー合同で倒すボス**が現れた！\n\n"
                     f"メッセージを送るだけで自動攻撃！\n"
                     f"どのサーバーのメンバーでも参加できます！\n\n"
-                    f"討伐成功で全サーバーのXPが **{boost}倍**（{days}日間）になります！"
+                    f"討伐成功で全サーバーのXPが **{boost}倍**（{actual_boost_days}日間）になります！"
                 ),
                 color=discord.Color.from_rgb(255, 50, 50)
             )
-            embed.add_field(name="❤️ HP",     value=f"{hp:,}")
-            embed.add_field(name="📅 開催期間",    value=f"{days}日間")
-            embed.add_field(name="🎁 報酬",    value=f"XP **{boost}倍**（{actual_boost_days}日間） + `{EVENT_BOSS_CLEAR_ROLE}` ロール", inline=False)
+            embed.add_field(name="❤️ HP",       value=f"{hp:,}")
+            embed.add_field(name="📅 開催期間",  value=f"{days}日間")
+            reward_text = f"XP **{boost}倍**（{actual_boost_days}日間） + `{EVENT_BOSS_CLEAR_ROLE}` ロール"
+            if reward_xp > 0:
+                reward_text += f"\n⚠️ 受取条件：討伐期間中に **{reward_xp:,}ダメージ以上** 与えたメンバーのみ"
+            embed.add_field(name="🎁 報酬", value=reward_text, inline=False)
             embed.set_footer(text="全サーバーで力を合わせて倒せ！")
             try:
                 await notify_channel.send("@everyone", embed=embed)
@@ -3152,14 +3265,15 @@ async def on_guild_join(guild):
                 "このBotはDiscordサーバーにレベル・XP・ランキング・ボス討伐などの\n"
                 "ゲーミフィケーション機能を追加します！\n\n"
                 "**📌 基本的な仕組み**\n"
-                "・メッセージを送ると**XP**が貯まります（10秒クールダウン）\n"
+                "・メッセージを送ると**XP**が貯まります\n"
+                "　└ 10秒以内に3回以上送るとXP無効（スパム対策）\n"
                 "・VCに2人以上いると**30秒ごとにXP**が貯まります\n"
                 "　└ ミュート中: +2XP　／　発言中: +15XP\n"
                 "・XPが一定量貯まると**レベルアップ**します\n"
                 "・レベルに応じて**ランクロール**が自動付与されます\n\n"
                 "**🔥 XPブースト**\n"
                 "・毎日ランダムな時間に**2〜3倍ブースト**が1時間発動！\n"
-                "・ボス討伐後は**全員XP2倍**になります\n\n"
+                "・ボス討伐後は**討伐者にXP2倍**の個人バフが付与されます\n\n"
                 "**✨ クリティカル**\n"
                 "XP獲得時に低確率でクリティカルが発生しXPが大幅アップ！\n"
                 "✨ミニCT×5 ／ 🔥CT×10 ／ ⚡超CT×25 ／ 💥超+CT×50"
@@ -3182,7 +3296,7 @@ async def on_guild_join(guild):
                 "Lv500〜：💎 Legend\n\n"
                 "🌟 **Lv3達成で PHOTO+ ロールを永久取得！**\n"
                 "🥇 **週間TOP3には週間ロールを付与！**\n"
-                "⚔️ **ボス討伐参加者には ⚔️ボス討伐者 ロールを付与！**\n"
+                "⚔️ **ボス討伐ごとに LV〇〇ボス討伐者 ロールを付与！（月曜リセット）**\n"
                 "👑 **イベントボス討伐で 👑BOSS VIP ロールを付与！**"
             ),
             color=discord.Color.gold()
@@ -3193,7 +3307,7 @@ async def on_guild_join(guild):
             title="🎁 デイリーボーナス & 💰 コインシステム",
             description=(
                 "**🎁 デイリーボーナス（1日1回）**\n"
-                "毎日最初のメッセージでXP & コインを獲得！\n"
+                "毎日最初のメッセージまたはVC入室でXP & コインを獲得！\n"
                 "1日目:+100XP / 2日目:+200XP / 3日目:+300XP\n"
                 "4日目:+500XP / 5日目以降:+1000XP（MAX）\n"
                 "連続ログインでコインも増加！（100+連続日数×20、上限500）\n\n"
@@ -3203,7 +3317,7 @@ async def on_guild_join(guild):
                 "・週間1000XP達成ボーナス: +500コイン\n"
                 "・ボス討伐: ダメージ×0.1コイン\n"
                 "・宝箱（/chest）: 10〜100コイン（1時間CD）\n"
-                "・デイリーミッション（/dailymission）: +200コイン\n\n"
+                "・デイリーミッション（/dailymission）: 100〜500コイン（曜日別）\n\n"
                 "※ 1日の獲得上限は **1,500コイン** です"
             ),
             color=discord.Color.green()
@@ -3215,13 +3329,20 @@ async def on_guild_join(guild):
             description=(
                 "コインを使ってアイテムを購入！（`/shop` で確認・`/buy` で購入）\n\n"
                 "**⚙️ 便利系**\n"
-                "・**XPブースト（小）** … 1,500コイン｜XP×1.5（30分）\n"
-                "・**XPブースト（中）** … 2,000コイン｜XP×2.0（30分）\n"
-                "・**デイリー強化** … 1,000コイン｜デイリー報酬×1.5（24時間）\n\n"
+                "・**XPブースト（小）** … 1,500コイン｜XP×1.5（10分）\n"
+                "・**XPブースト（中）** … 2,000コイン｜XP×2.0（10分）\n"
+                "・**デイリー強化** … 1,000コイン｜デイリー報酬×1.5（24時間）\n"
+                "・**🛡️ XP減衰ガード** … 2,500コイン｜その日のXP減衰を無効化\n"
+                "・**🔰 ランクダウン防止シールド** … 5,000コイン｜次の1回のランクダウンを防ぐ\n\n"
                 "**⚔️ 戦闘系**\n"
-                "・**攻撃力アップ** … 800コイン｜ボスダメージ×1.2（15分）\n"
+                "・**攻撃力アップ** … 1,000コイン｜ボスダメージ×1.2（60分）\n"
                 "・**クリティカル強化** … 5,000コイン｜クリティカル率アップ（15分）\n"
-                "・**ボス特効** … 2,000コイン｜ボスダメージ×1.3（15分）"
+                "・**ボス特効** … 2,000コイン｜ボスダメージ×1.3（15分）\n\n"
+                "**🎲 ギャンブル系**\n"
+                "・**🎁 ミステリーボックス** … 3,000コイン｜`/openbox` で使用\n"
+                "・**📈 投資パック** … 3,000コイン〜｜`/invest` で使用（500コイン単位）\n\n"
+                "**👑 プレミアム**\n"
+                "・**👑 ROYAL PASS** … 50,000コイン｜XP+20%・デイリー+50%・特別ロール（7日間）"
             ),
             color=discord.Color.purple()
         )
@@ -3233,13 +3354,17 @@ async def on_guild_join(guild):
                 "**週ボス**\n"
                 "・毎週月曜6時に出現！ 初期HP: 30,000\n"
                 "・メッセージ or VC参加で自動攻撃！\n"
-                "・討伐成功: ⚔️ボス討伐者ロール + XP2倍ブースト\n"
+                "・討伐成功: LV〇〇ボス討伐者ロール + XP2倍ブースト\n"
                 "・討伐失敗: 残りHP + 最大HPの20%回復して翌週再出現\n"
-                "・HP報告: 毎日0時・6時・12時・18時\n\n"
+                "・HP報告: 毎日8時・16時・0時\n\n"
                 "**👑 イベントボス**\n"
                 "・通常ボスを5回クリアするたびに自動出現！\n"
                 "・討伐成功: 👑BOSS VIPロール + XP3倍ブースト（7日間）\n"
-                "・MVPには特別称号メッセージ！"
+                "・MVPには特別称号メッセージ！\n\n"
+                "**🌐 サーバーリンクボス**\n"
+                "・全サーバー合同で挑む特別ボス！\n"
+                "・メッセージ or VC参加で全サーバーのダメージが合算！\n"
+                "・討伐成功: 条件達成者に個人XPブースト + 👑BOSS VIPロール"
             ),
             color=discord.Color.red()
         )
@@ -3256,8 +3381,12 @@ async def on_guild_join(guild):
                 "`/myxp` - レベル・XP・連続ログイン詳細\n"
                 "`/top` - XPランキングTOP10\n"
                 "`/weeklynote` - 今週の活動レポート\n"
-                "`/boss` - 週ボス状況確認\n"
-                "`/eventboss status` - イベントボス状況確認"
+                "`/bosstats` - ボス討伐統計・全ボス状況確認\n"
+                "`/serverranking` - 全サーバー週間XPランキング\n"
+                "`/rates` - 現在のXPブースト倍率確認\n"
+                "`/levelstats` - サーバーのレベル分布\n"
+                "`/peakhours` - 時間帯別アクティブ分析\n"
+                "`/servercoinsranking` - 全サーバーコインランキング"
             ),
             inline=False
         )
@@ -3268,8 +3397,14 @@ async def on_guild_join(guild):
                 "`/buffs` - 有効なバフ確認\n"
                 "`/shop` - ショップ一覧表示\n"
                 "`/buy <item_id>` - アイテム購入\n"
+                "`/openbox` - ミステリーボックスを開ける\n"
+                "`/invest` - 投資パック購入\n"
+                "`/investstatus` - 投資状況確認\n"
+                "`/claiminvest` - 投資回収\n"
+                "`/buyroyal` - ROYAL PASS購入\n"
                 "`/chest` - 宝箱を開ける（1時間CD）\n"
-                "`/dailymission` - デイリーミッション受け取り"
+                "`/dailymission` - デイリーミッション確認・受け取り\n"
+                "`/shopstats` - 人気アイテムTOP5"
             ),
             inline=False
         )
@@ -3280,9 +3415,7 @@ async def on_guild_join(guild):
                 "`/set getchannel` - XP獲得チャンネルの設定\n"
                 "`/setuproles` - ロール・チャンネル再セットアップ\n"
                 "`/userdata @ユーザー` - ユーザーデータ確認\n"
-                "`/alldata` - 全データCSV出力\n"
-                "`/eventboss start` - イベントボス手動召喚\n"
-                "`/eventboss setname` - イベントボス名設定"
+                "`/alldata` - 全データCSV出力"
             ),
             inline=False
         )
@@ -4154,7 +4287,10 @@ async def levelstats(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     embed.set_footer(text=f"総ユーザー数：{total}人")
-    await interaction.response.send_message(embed=embed)
+    try:
+        await interaction.response.send_message(embed=embed)
+    except discord.HTTPException:
+        await interaction.response.send_message("⚠️ 通信エラーが発生しました。もう一度お試しください。", ephemeral=True)
 
 
 # =========================
