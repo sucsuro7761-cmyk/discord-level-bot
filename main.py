@@ -3556,9 +3556,8 @@ async def on_guild_join(guild):
 )
 @discord.app_commands.choices(
     mention_type=[
-        discord.app_commands.Choice(name="通常メッセージ（メンションなし）", value="none"),
-        discord.app_commands.Choice(name="@here メンション",                value="here"),
-        discord.app_commands.Choice(name="@everyone メンション",            value="everyone"),
+        discord.app_commands.Choice(name="通常メッセージ（メンションなし）",           value="none"),
+        discord.app_commands.Choice(name="むれちゃんbotお知らせ ロールメンション",      value="notification"),
     ],
     target=[
         discord.app_commands.Choice(name="通知チャンネル",         value="notify"),
@@ -3589,17 +3588,17 @@ async def announce(
     embed.set_footer(text=f"送信者: {interaction.user.display_name}")
     embed.timestamp = datetime.now(JST)
 
-    if mention_type == "everyone":
-        prefix = "@everyone"
-    elif mention_type == "here":
-        prefix = "@here"
-    else:
-        prefix = None
+    static_prefix: str | None = None
 
     success = 0
     failed  = 0
 
     for guild in bot.guilds:
+        if mention_type == "notification":
+            prefix = get_notification_mention(guild) or None
+        else:
+            prefix = static_prefix
+
         channels_to_send = []
 
         if target in ("notify", "both"):
