@@ -773,19 +773,7 @@ async def on_message(message):
         return
 
     data = load_data(guild_id)
-    if user_id not in data:
-        data[user_id] = {}
-
-    data[user_id].setdefault("xp", 0)
-    data[user_id].setdefault("level", 1)
-    data[user_id].setdefault("last_daily", "")
-    data[user_id].setdefault("weekly_xp", 0)
-    data[user_id].setdefault("login_streak", 0)
-    data[user_id].setdefault("weekly_chat_xp", 0)
-    data[user_id].setdefault("weekly_vc_xp", 0)
-    data[user_id].setdefault("weekly_active_days", [])
-    data[user_id].setdefault("last_weekly_xp", 0)
-    data[user_id].setdefault("last_weekly_rank", 0)
+    ensure_user_data(data, user_id)
     data.setdefault(LAST_DECAY_KEY, "")
 
     # アクティブ日数を記録
@@ -874,8 +862,7 @@ async def on_message(message):
     boost = get_boost(guild_id)
 
     # ショップバフ適用（xp_multiplier・crit_bonus）
-    data_tmp = load_data(guild_id)
-    info_tmp = data_tmp.get(user_id, {})
+    info_tmp = data[user_id]
     cleanup_expired_buffs(info_tmp)
     xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
     shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
@@ -1114,12 +1101,7 @@ async def on_voice_state_update(member, before, after):
                     continue  # フラグON → XP停止
 
             data = load_data(guild_id)
-            if user_id not in data:
-                data[user_id] = {}
-            data[user_id].setdefault("xp", 0)
-            data[user_id].setdefault("level", 1)
-            data[user_id].setdefault("last_daily", "")
-            data[user_id].setdefault("weekly_xp", 0)
+            ensure_user_data(data, user_id)
 
             if not member.voice or not member.voice.channel:
                 break
@@ -1156,10 +1138,6 @@ async def on_voice_state_update(member, before, after):
                         )
                     except discord.DiscordServerError:
                         pass
-
-            data[user_id]["xp"] += gain
-            data[user_id]["weekly_xp"] += gain
-            data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
 
             await check_level_up(member, data, user_id)
             save_data(guild_id, data)
