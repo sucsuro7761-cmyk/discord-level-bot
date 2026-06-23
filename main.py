@@ -1040,7 +1040,7 @@ async def notificationpanel(interaction: discord.Interaction):
     role_id = get_notification_role_id(interaction.guild.id)
     if not role_id:
         await interaction.response.send_message(
-            "❌ 通知ロールが未設定です。先に `/set notificationrole set` でロールを設定してください。",
+            "❌ 通知ロールが未設定です。`/setuproles` を実行して「むれちゃんbotお知らせ」ロールを作成してください。",
             ephemeral=True
         )
         return
@@ -3003,41 +3003,22 @@ async def set_getchannel(
         )
         await interaction.response.send_message(embed=embed)
 
-@set_group.command(name="notificationrole", description="通知メンション対象ロールを設定（管理者用）")
+@set_group.command(name="notificationrole", description="通知ロールの設定確認・解除（管理者用）")
 @discord.app_commands.checks.has_permissions(administrator=True)
 @discord.app_commands.describe(
-    action="set=ロール設定 / clear=解除（@everyone不使用に） / show=現在の設定確認",
-    role="対象ロール（set時に指定）"
+    action="clear=解除（メンションなしに戻す） / show=現在の設定確認",
 )
 @discord.app_commands.choices(action=[
-    discord.app_commands.Choice(name="set - ロールを設定", value="set"),
     discord.app_commands.Choice(name="clear - 設定を解除（メンションなしに戻す）", value="clear"),
     discord.app_commands.Choice(name="show - 現在の設定を確認", value="show"),
 ])
 async def set_notificationrole(
     interaction: discord.Interaction,
     action: str,
-    role: discord.Role = None
 ):
     guild_id = interaction.guild.id
 
-    if action == "set":
-        if role is None:
-            await interaction.response.send_message("❌ ロールを指定してください。", ephemeral=True)
-            return
-        set_notification_role_id(guild_id, role.id)
-        embed = discord.Embed(
-            title="✅ 通知ロールを設定しました",
-            description=(
-                f"{role.mention} を通知メンション対象ロールに設定しました。\n"
-                f"ボス出現・XPブーストなどの通知はこのロールへのメンションになります。\n\n"
-                f"`/notificationpanel` でユーザーが自分でON/OFFできるパネルを設置できます。"
-            ),
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
-
-    elif action == "clear":
+    if action == "clear":
         clear_notification_role_id(guild_id)
         embed = discord.Embed(
             title="🔓 通知ロール設定を解除",
@@ -3073,6 +3054,7 @@ async def setuproles(interaction: discord.Interaction):
     guild = interaction.guild
 
     roles_to_create = [
+        {"name": "むれちゃんbotお知らせ", "color": discord.Color.from_rgb(88, 101, 242)},
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
@@ -3106,9 +3088,15 @@ async def setuproles(interaction: discord.Interaction):
         except discord.Forbidden:
             pass
 
+    # お知らせロールを通知ロールとして自動登録
+    notif_role = discord.utils.get(guild.roles, name="むれちゃんbotお知らせ")
+    if notif_role:
+        set_notification_role_id(guild.id, notif_role.id)
+
     # ロール位置の整理
     try:
         role_order = [
+            "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
             "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
             "CORE", "MEMBER", "MEMBER Lite",
@@ -3273,6 +3261,7 @@ bot.tree.add_command(allservereventboss_group)
 @bot.event
 async def on_guild_join(guild):
     roles_to_create = [
+        {"name": "むれちゃんbotお知らせ", "color": discord.Color.from_rgb(88, 101, 242)},
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
@@ -3280,13 +3269,13 @@ async def on_guild_join(guild):
         {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
-        {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},  # ダイヤモンドブルー,
+        {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
         {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
         {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
-        {"name": "👑BOSS VIP",   "color": discord.Color.from_rgb(255, 215,   0)},  # イベント限定
+        {"name": "👑BOSS VIP",   "color": discord.Color.from_rgb(255, 215,   0)},
     ]
 
     created_roles = []
@@ -3304,10 +3293,16 @@ async def on_guild_join(guild):
         except discord.Forbidden:
             pass
 
+    # お知らせロールを通知ロールとして自動登録
+    notif_role = discord.utils.get(guild.roles, name="むれちゃんbotお知らせ")
+    if notif_role:
+        set_notification_role_id(guild.id, notif_role.id)
+
     # ロールの位置を整理（Botロールを上に、ランク・週間ロールをその下に）
     try:
         # 並び順（上から順に）
         role_order = [
+            "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
             "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
             "CORE", "MEMBER", "MEMBER Lite",
