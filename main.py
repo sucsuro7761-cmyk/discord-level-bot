@@ -349,6 +349,35 @@ def clear_xp_channels(guild_id):
         config[gid]["xp_channels"] = []
         save_config(config)
 
+def get_notification_role_id(guild_id):
+    """通知メンション対象ロールIDを返す（未設定=None）"""
+    config = load_config()
+    return config.get(str(guild_id), {}).get("notification_role_id")
+
+def set_notification_role_id(guild_id, role_id):
+    config = load_config()
+    gid = str(guild_id)
+    if gid not in config:
+        config[gid] = {}
+    config[gid]["notification_role_id"] = role_id
+    save_config(config)
+
+def clear_notification_role_id(guild_id):
+    config = load_config()
+    gid = str(guild_id)
+    if gid in config and "notification_role_id" in config[gid]:
+        del config[gid]["notification_role_id"]
+        save_config(config)
+
+def get_notification_mention(guild):
+    """通知ロールが設定されていればそのメンション文字列、未設定なら空文字を返す"""
+    role_id = get_notification_role_id(guild.id)
+    if role_id:
+        role = guild.get_role(role_id)
+        if role:
+            return role.mention
+    return ""
+
 # =========================
 # Data read/write（サーバーごと）
 # =========================
@@ -972,6 +1001,66 @@ class AfkCheckView(discord.ui.View):
             view=None
         )
         self.stop()
+
+# =========================
+# 通知ロール セルフ付与/削除ビュー（永続）
+# =========================
+class NotificationRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔔 通知ON / 🔕 通知OFF", style=discord.ButtonStyle.primary, custom_id="toggle_notification_role")
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role_id = get_notification_role_id(interaction.guild.id)
+        if not role_id:
+            await interaction.response.send_message(
+                "❌ 通知ロールが設定されていません。管理者に連絡してください。", ephemeral=True
+            )
+            return
+        role = interaction.guild.get_role(role_id)
+        if not role:
+            await interaction.response.send_message(
+                "❌ ロールが見つかりません。管理者に連絡してください。", ephemeral=True
+            )
+            return
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(
+                f"🔕 **{role.name}** を解除しました。通知は届かなくなります。", ephemeral=True
+            )
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(
+                f"🔔 **{role.name}** を付与しました。通知が届くようになります！", ephemeral=True
+            )
+
+@bot.tree.command(name="notificationpanel", description="通知ロール設定パネルを設置（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def notificationpanel(interaction: discord.Interaction):
+    role_id = get_notification_role_id(interaction.guild.id)
+    if not role_id:
+        await interaction.response.send_message(
+            "❌ 通知ロールが未設定です。先に `/set notificationrole set` でロールを設定してください。",
+            ephemeral=True
+        )
+        return
+    role = interaction.guild.get_role(role_id)
+    role_name = role.name if role else "（不明なロール）"
+    embed = discord.Embed(
+        title="🔔 通知設定パネル",
+        description=(
+            f"ボタンを押すと **{role_name}** ロールのON/OFFを切り替えられます。\n\n"
+            f"🔔 **ON** → ボス出現・XPブーストなどの通知が届きます\n"
+            f"🔕 **OFF** → 通知メンションが届かなくなります"
+        ),
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed, view=NotificationRoleView())
+
+@notificationpanel.error
+async def notificationpanel_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 async def run_afk_check(member, guild_id, user_id, ck):
     """AFKチェックを実行。タイムアウトしたらTrueを返す（XP停止）"""
@@ -1999,8 +2088,9 @@ async def xp_boost_scheduler():
                 ch_id = get_level_channel_id(guild.id)
                 channel = guild.get_channel(ch_id) if ch_id else None
                 if channel:
+                    mention = get_notification_mention(guild)
                     await channel.send(
-                        f"🔥 **XP BOOST START!**\n"
+                        f"{mention}\n🔥 **XP BOOST START!**\n"
                         f"XPが **{multiplier}倍** になりました！\n"
                         f"1時間限定！"
                     )
@@ -2161,7 +2251,8 @@ async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplie
         embed.add_field(name="📅 開催期間", value=f"{boost_days}日間")
         embed.add_field(name="🎁 討伐報酬", value=f"`{EVENT_BOSS_CLEAR_ROLE}` ロール\nXP **{boost_multi}倍**（{boost_days}日間）", inline=False)
         embed.set_footer(text="全員で力を合わせて倒せ！")
-        await notify_channel.send("@everyone", embed=embed)
+        mention = get_notification_mention(guild)
+        await notify_channel.send(mention or None, embed=embed)
 
 async def handle_global_event_boss_clear(boss):
     """サーバーリンクボス討伐処理"""
@@ -2912,6 +3003,63 @@ async def set_getchannel(
         )
         await interaction.response.send_message(embed=embed)
 
+@set_group.command(name="notificationrole", description="通知メンション対象ロールを設定（管理者用）")
+@discord.app_commands.checks.has_permissions(administrator=True)
+@discord.app_commands.describe(
+    action="set=ロール設定 / clear=解除（@everyone不使用に） / show=現在の設定確認",
+    role="対象ロール（set時に指定）"
+)
+@discord.app_commands.choices(action=[
+    discord.app_commands.Choice(name="set - ロールを設定", value="set"),
+    discord.app_commands.Choice(name="clear - 設定を解除（メンションなしに戻す）", value="clear"),
+    discord.app_commands.Choice(name="show - 現在の設定を確認", value="show"),
+])
+async def set_notificationrole(
+    interaction: discord.Interaction,
+    action: str,
+    role: discord.Role = None
+):
+    guild_id = interaction.guild.id
+
+    if action == "set":
+        if role is None:
+            await interaction.response.send_message("❌ ロールを指定してください。", ephemeral=True)
+            return
+        set_notification_role_id(guild_id, role.id)
+        embed = discord.Embed(
+            title="✅ 通知ロールを設定しました",
+            description=(
+                f"{role.mention} を通知メンション対象ロールに設定しました。\n"
+                f"ボス出現・XPブーストなどの通知はこのロールへのメンションになります。\n\n"
+                f"`/notificationpanel` でユーザーが自分でON/OFFできるパネルを設置できます。"
+            ),
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    elif action == "clear":
+        clear_notification_role_id(guild_id)
+        embed = discord.Embed(
+            title="🔓 通知ロール設定を解除",
+            description="通知ロールの設定を解除しました。\nボス出現などの通知はメンションなしで送信されます。",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed)
+
+    elif action == "show":
+        role_id = get_notification_role_id(guild_id)
+        if role_id:
+            role_obj = interaction.guild.get_role(role_id)
+            desc = f"現在の通知ロール: {role_obj.mention if role_obj else f'不明 (ID: {role_id})'}"
+        else:
+            desc = "通知ロール未設定（メンションなしで送信）"
+        embed = discord.Embed(
+            title="📋 通知ロール設定",
+            description=desc,
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 bot.tree.add_command(set_group)
 
 
@@ -3104,7 +3252,8 @@ async def allservereventboss_start(
             embed.add_field(name="🎁 報酬", value=reward_text, inline=False)
             embed.set_footer(text="全サーバーで力を合わせて倒せ！")
             try:
-                await notify_channel.send("@everyone", embed=embed)
+                mention = get_notification_mention(guild)
+                await notify_channel.send(mention or None, embed=embed)
                 success += 1
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -4476,6 +4625,7 @@ async def xpstats(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 @bot.event
 async def on_ready():
+    bot.add_view(NotificationRoleView())
     synced = await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
     print(f"接続中のサーバー: {[g.name for g in bot.guilds]}")
