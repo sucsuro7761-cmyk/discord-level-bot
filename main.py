@@ -378,6 +378,46 @@ def get_notification_mention(guild):
             return role.mention
     return ""
 
+async def setup_notification_panel_channel(guild):
+    """「通知設定」チャンネルを作成（既存なら再利用）し、通知パネルを送信する"""
+    role_id = get_notification_role_id(guild.id)
+    if not role_id:
+        return
+
+    role = guild.get_role(role_id)
+    role_name = role.name if role else "むれちゃんbotお知らせ"
+
+    existing = discord.utils.get(guild.text_channels, name="通知設定")
+    if existing:
+        panel_ch = existing
+    else:
+        try:
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
+                guild.me: discord.PermissionOverwrite(send_messages=True, read_messages=True)
+            }
+            panel_ch = await guild.create_text_channel(
+                name="通知設定",
+                overwrites=overwrites,
+                reason="セットアップ: 通知設定パネルチャンネル"
+            )
+        except discord.Forbidden:
+            return
+
+    embed = discord.Embed(
+        title="🔔 通知設定パネル",
+        description=(
+            f"ボタンを押すと **{role_name}** ロールのON/OFFを切り替えられます。\n\n"
+            f"🔔 **ON** → ボス出現・XPブーストなどの通知が届きます\n"
+            f"🔕 **OFF** → 通知メンションが届かなくなります"
+        ),
+        color=discord.Color.blue()
+    )
+    try:
+        await panel_ch.send(embed=embed, view=NotificationRoleView())
+    except discord.Forbidden:
+        pass
+
 # =========================
 # Data read/write（サーバーごと）
 # =========================
@@ -3138,6 +3178,8 @@ async def setuproles(interaction: discord.Interaction):
         except discord.Forbidden:
             channel_msg = "⚠️ 通知チャンネルの作成に失敗しました（権限不足）"
 
+    await setup_notification_panel_channel(guild)
+
     # 結果レポート
     desc = ""
     if created_roles:
@@ -3249,6 +3291,7 @@ async def setupall(interaction: discord.Interaction):
                 except discord.Forbidden:
                     pass
 
+            await setup_notification_panel_channel(guild)
             success_guilds.append(guild.name)
         except Exception as e:
             failed_guilds.append(f"{guild.name}（{e}）")
@@ -3467,6 +3510,8 @@ async def on_guild_join(guild):
             color=discord.Color.green()
         )
         await notify_channel.send(embed=embed)
+
+    await setup_notification_panel_channel(guild)
 
     # ===== bot説明チャンネルを作成 =====
     desc_channel = None
