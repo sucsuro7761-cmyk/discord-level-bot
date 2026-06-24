@@ -3160,6 +3160,113 @@ async def setuproles_error(interaction: discord.Interaction, error):
     if isinstance(error, discord.app_commands.MissingPermissions):
         await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
+@bot.tree.command(name="setupall", description="全サーバーに一括セットアップを実行（bot管理者専用）")
+async def setupall(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    roles_to_create = [
+        {"name": "むれちゃんbotお知らせ", "color": discord.Color.from_rgb(88, 101, 242)},
+        {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
+        {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
+        {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
+        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
+        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
+        {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
+        {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
+        {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
+        {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
+        {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
+        {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
+    ]
+    role_order = [
+        "むれちゃんbotお知らせ",
+        "🥇週間王者", "🥈週間準王", "🥉週間三位",
+        "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+        "CORE", "MEMBER", "MEMBER Lite",
+        "⚔️ボス討伐者", "PHOTO+"
+    ]
+
+    success_guilds = []
+    failed_guilds  = []
+
+    for guild in bot.guilds:
+        try:
+            # ロール作成
+            for role_data in roles_to_create:
+                if not discord.utils.get(guild.roles, name=role_data["name"]):
+                    try:
+                        await guild.create_role(
+                            name=role_data["name"],
+                            color=role_data["color"],
+                            reason="setupallコマンドによる一括セットアップ"
+                        )
+                        await asyncio.sleep(0.5)
+                    except discord.Forbidden:
+                        pass
+
+            # お知らせロールを通知ロールとして自動登録
+            notif_role = discord.utils.get(guild.roles, name="むれちゃんbotお知らせ")
+            if notif_role:
+                set_notification_role_id(guild.id, notif_role.id)
+
+            # ロール位置の整理
+            try:
+                bot_role = guild.me.top_role
+                max_pos  = bot_role.position - 1
+                positions = {}
+                for i, role_name in enumerate(role_order):
+                    role = discord.utils.get(guild.roles, name=role_name)
+                    if role:
+                        positions[role] = max_pos - i
+                if positions:
+                    await guild.edit_role_positions(positions=positions)
+            except Exception:
+                pass
+
+            # 通知チャンネルの確認・作成
+            existing = discord.utils.get(guild.text_channels, name="レベル通知")
+            if existing:
+                if not get_level_channel_id(guild.id):
+                    set_level_channel_id(guild.id, existing.id)
+            else:
+                try:
+                    overwrites = {
+                        guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
+                        guild.me: discord.PermissionOverwrite(send_messages=True, read_messages=True)
+                    }
+                    ch = await guild.create_text_channel(
+                        name="レベル通知",
+                        overwrites=overwrites,
+                        reason="setupallコマンドによる一括セットアップ"
+                    )
+                    set_level_channel_id(guild.id, ch.id)
+                except discord.Forbidden:
+                    pass
+
+            success_guilds.append(guild.name)
+        except Exception as e:
+            failed_guilds.append(f"{guild.name}（{e}）")
+
+    desc = f"✅ 成功: {len(success_guilds)}サーバー\n"
+    if success_guilds:
+        desc += "\n".join(f"　・{g}" for g in success_guilds) + "\n"
+    if failed_guilds:
+        desc += f"\n❌ 失敗: {len(failed_guilds)}サーバー\n"
+        desc += "\n".join(f"　・{g}" for g in failed_guilds)
+
+    embed = discord.Embed(
+        title="🔧 全サーバーセットアップ完了",
+        description=desc,
+        color=discord.Color.green()
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 # =========================
 # =========================
 # /eventboss コマンド群
