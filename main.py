@@ -191,6 +191,14 @@ spam_message_times = {}
 
 # 寝落ち管理: { "guild_id:user_id": True } → XP停止フラグ
 vc_afk_flags = {}
+# ギルドごとのデータ競合防止ロック
+_data_locks: dict[int, asyncio.Lock] = {}
+
+def get_data_lock(guild_id: int) -> asyncio.Lock:
+    if guild_id not in _data_locks:
+        _data_locks[guild_id] = asyncio.Lock()
+    return _data_locks[guild_id]
+
 # 最後にVCでXPを獲得した時刻（90分チェック用）: { "guild_id:user_id": timestamp }
 vc_last_xp_time = {}
 
@@ -841,129 +849,130 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    data = load_data(guild_id)
-    ensure_user_data(data, user_id)
-    data.setdefault(LAST_DECAY_KEY, "")
+    async with get_data_lock(guild_id):
+        data = load_data(guild_id)
+        ensure_user_data(data, user_id)
+        data.setdefault(LAST_DECAY_KEY, "")
 
-    # アクティブ日数を記録
-    today_jst = datetime.now(JST).strftime("%Y-%m-%d")
-    if today_jst not in data[user_id]["weekly_active_days"]:
-        data[user_id]["weekly_active_days"].append(today_jst)
+        # アクティブ日数を記録
+        today_jst = datetime.now(JST).strftime("%Y-%m-%d")
+        if today_jst not in data[user_id]["weekly_active_days"]:
+            data[user_id]["weekly_active_days"].append(today_jst)
 
-    # 最終アクティブ日を記録（減衰判定用）
-    data[user_id]["last_active_date"] = today_jst
+        # 最終アクティブ日を記録（減衰判定用）
+        data[user_id]["last_active_date"] = today_jst
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if data[user_id]["last_daily"] != today:
-        if data[user_id]["last_daily"] == yesterday:
-            data[user_id]["login_streak"] += 1
-        else:
-            data[user_id]["login_streak"] = 1
-
-        streak = data[user_id]["login_streak"]
-
-        if streak == 1:
-            bonus = 100
-        elif streak == 2:
-            bonus = 200
-        elif streak == 3:
-            bonus = 300
-        elif streak == 4:
-            bonus = 500
-        else:
-            bonus = 1000
-
-        data[user_id]["xp"] += bonus
-        data[user_id]["weekly_xp"] += bonus
-        data[user_id]["last_daily"] = today
-
-        # ログインボーナスでボスにダメージ
-        boss = load_boss(guild_id)
-        if boss.get("active"):
-            boss["damage"][user_id] = boss["damage"].get(user_id, 0) + bonus
-            boss["hp"] = max(0, boss["hp"] - bonus)
-            if boss["hp"] <= 0:
-                boss["active"] = False
-                boss["cleared"] += 1
-                save_boss(guild_id, boss)
-                await handle_boss_clear(message.guild, boss)
+        if data[user_id]["last_daily"] != today:
+            if data[user_id]["last_daily"] == yesterday:
+                data[user_id]["login_streak"] += 1
             else:
-                save_boss(guild_id, boss)
+                data[user_id]["login_streak"] = 1
 
-        # ストリークボーナスコイン（100 + streak * 20、上限500）
-        streak_coins = min(100 + (streak * 20), 500)
-        info = ensure_user_data(data, user_id)
+            streak = data[user_id]["login_streak"]
 
-        # ログインボーナス2倍チケット適用
-        if info.get("login_bonus_2x"):
-            streak_coins *= 2
-            info["login_bonus_2x"] = False
+            if streak == 1:
+                bonus = 100
+            elif streak == 2:
+                bonus = 200
+            elif streak == 3:
+                bonus = 300
+            elif streak == 4:
+                bonus = 500
+            else:
+                bonus = 1000
 
-        today_earned = info.get("coin_daily_earned", 0)
-        if today_earned < COIN_DAILY_CAP:
-            add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
-            info["coins"] = info.get("coins", 0) + add_amount
-            info["coin_daily_earned"] = today_earned + add_amount
-            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + add_amount
-        else:
-            streak_coins = 0
+            data[user_id]["xp"] += bonus
+            data[user_id]["weekly_xp"] += bonus
+            data[user_id]["last_daily"] = today
 
-        if streak == 1:
-            streak_msg = "🎁 **デイリーボーナス！**"
-        elif streak < 5:
-            streak_msg = f"🔥 **{streak}日連続ログイン！**"
-        else:
-            streak_msg = f"🌟 **{streak}日連続ログイン！MAX ボーナス！**"
+            # ログインボーナスでボスにダメージ
+            boss = load_boss(guild_id)
+            if boss.get("active"):
+                boss["damage"][user_id] = boss["damage"].get(user_id, 0) + bonus
+                boss["hp"] = max(0, boss["hp"] - bonus)
+                if boss["hp"] <= 0:
+                    boss["active"] = False
+                    boss["cleared"] += 1
+                    save_boss(guild_id, boss)
+                    await handle_boss_clear(message.guild, boss)
+                else:
+                    save_boss(guild_id, boss)
 
-        coin_msg = f" 💰 +{streak_coins}コイン" if streak_coins > 0 else ""
-        await message.channel.send(
-            f"{streak_msg}\n"
-            f"{message.author.mention} **+{bonus}XP**{coin_msg} "
-            f"（連続{streak}日目）"
-        )
+            # ストリークボーナスコイン（100 + streak * 20、上限500）
+            streak_coins = min(100 + (streak * 20), 500)
+            info = ensure_user_data(data, user_id)
 
-        # 7の倍数連続ログインでミステリーボックスプレゼント
-        if streak % 7 == 0:
-            await give_streak_mystery_box(message.author, message.guild, message.channel, streak)
+            # ログインボーナス2倍チケット適用
+            if info.get("login_bonus_2x"):
+                streak_coins *= 2
+                info["login_bonus_2x"] = False
 
-    boost = get_boost(guild_id)
+            today_earned = info.get("coin_daily_earned", 0)
+            if today_earned < COIN_DAILY_CAP:
+                add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
+                info["coins"] = info.get("coins", 0) + add_amount
+                info["coin_daily_earned"] = today_earned + add_amount
+                info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + add_amount
+            else:
+                streak_coins = 0
 
-    # ショップバフ適用（xp_multiplier・crit_bonus）
-    info_tmp = data[user_id]
-    cleanup_expired_buffs(info_tmp)
-    xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
-    shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
-    has_crit_buff = bool(info_tmp.get("buffs", {}).get("crit_bonus"))
+            if streak == 1:
+                streak_msg = "🎁 **デイリーボーナス！**"
+            elif streak < 5:
+                streak_msg = f"🔥 **{streak}日連続ログイン！**"
+            else:
+                streak_msg = f"🌟 **{streak}日連続ログイン！MAX ボーナス！**"
 
-    base_xp = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
-    xp_gain, crit_name, crit_multi = calc_crit(base_xp, has_crit_buff)
-    data[user_id]["xp"] += xp_gain
-    data[user_id]["weekly_xp"] += xp_gain
-    data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
-
-    # ミッション進捗：メッセージ数・XP獲得
-    info = ensure_user_data(data, user_id)
-    add_mission_progress(info, "msg_count", 1)
-    add_mission_progress(info, "xp_gained", xp_gain)
-
-    # クリティカル発生時に通知
-    if crit_name:
-        try:
+            coin_msg = f" 💰 +{streak_coins}コイン" if streak_coins > 0 else ""
             await message.channel.send(
-                f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+                f"{streak_msg}\n"
+                f"{message.author.mention} **+{bonus}XP**{coin_msg} "
+                f"（連続{streak}日目）"
             )
-        except discord.DiscordServerError:
-            pass
 
-    await check_level_up(message.author, data, user_id)
+            # 7の倍数連続ログインでミステリーボックスプレゼント
+            if streak % 7 == 0:
+                await give_streak_mystery_box(message.author, message.guild, message.channel, streak)
 
-    # 時間帯別アクティブ記録（/peakhours用）
-    hour_key = f"hour_{datetime.now(JST).hour}"
-    data[user_id][hour_key] = data[user_id].get(hour_key, 0) + 1
+        boost = get_boost(guild_id)
 
-    save_data(guild_id, data)
+        # ショップバフ適用（xp_multiplier・crit_bonus）
+        info_tmp = data[user_id]
+        cleanup_expired_buffs(info_tmp)
+        xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
+        shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
+        has_crit_buff = bool(info_tmp.get("buffs", {}).get("crit_bonus"))
+
+        base_xp = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
+        xp_gain, crit_name, crit_multi = calc_crit(base_xp, has_crit_buff)
+        data[user_id]["xp"] += xp_gain
+        data[user_id]["weekly_xp"] += xp_gain
+        data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
+
+        # ミッション進捗：メッセージ数・XP獲得
+        info = ensure_user_data(data, user_id)
+        add_mission_progress(info, "msg_count", 1)
+        add_mission_progress(info, "xp_gained", xp_gain)
+
+        # クリティカル発生時に通知
+        if crit_name:
+            try:
+                await message.channel.send(
+                    f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+                )
+            except discord.DiscordServerError:
+                pass
+
+        await check_level_up(message.author, data, user_id)
+
+        # 時間帯別アクティブ記録（/peakhours用）
+        hour_key = f"hour_{datetime.now(JST).hour}"
+        data[user_id][hour_key] = data[user_id].get(hour_key, 0) + 1
+
+        save_data(guild_id, data)
 
     boss = load_boss(guild_id)
     if boss.get("active"):
@@ -1229,47 +1238,48 @@ async def on_voice_state_update(member, before, after):
                 if afk_confirmed:
                     continue  # フラグON → XP停止
 
-            data = load_data(guild_id)
-            ensure_user_data(data, user_id)
+            async with get_data_lock(guild_id):
+                data = load_data(guild_id)
+                ensure_user_data(data, user_id)
 
-            if not member.voice or not member.voice.channel:
-                break
+                if not member.voice or not member.voice.channel:
+                    break
 
-            boost = get_boost(guild_id)
-            # ミュート中は2XP、ミュート解除（発言中）は15XP
-            is_muted = member.voice.self_mute or member.voice.mute if member.voice else True
-            base_xp_vc = 2 if is_muted else 15
+                boost = get_boost(guild_id)
+                # ミュート中は2XP、ミュート解除（発言中）は15XP
+                is_muted = member.voice.self_mute or member.voice.mute if member.voice else True
+                base_xp_vc = 2 if is_muted else 15
 
-            # VCクリティカル判定（テキストの半分の確率）
-            vc_info = data.get(user_id, {})
-            cleanup_expired_buffs(vc_info)
-            has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
-            base_xp_boosted = int(base_xp_vc * boost["multiplier"])
-            gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc, is_vc=True)
+                # VCクリティカル判定（テキストの半分の確率）
+                vc_info = data.get(user_id, {})
+                cleanup_expired_buffs(vc_info)
+                has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
+                base_xp_boosted = int(base_xp_vc * boost["multiplier"])
+                gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc, is_vc=True)
 
-            data[user_id]["xp"] += gain
-            data[user_id]["weekly_xp"] += gain
-            data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+                data[user_id]["xp"] += gain
+                data[user_id]["weekly_xp"] += gain
+                data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
 
-            # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
-            vc_info_m = ensure_user_data(data, user_id)
-            add_mission_progress(vc_info_m, "vc_minutes", 0.5)
-            add_mission_progress(vc_info_m, "xp_gained", gain)
+                # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
+                vc_info_m = ensure_user_data(data, user_id)
+                add_mission_progress(vc_info_m, "vc_minutes", 0.5)
+                add_mission_progress(vc_info_m, "xp_gained", gain)
 
-            # VCクリティカル発生時に通知
-            if crit_name_vc:
-                ch_id = get_level_channel_id(guild_id)
-                crit_ch = member.guild.get_channel(ch_id) if ch_id else None
-                if crit_ch:
-                    try:
-                        await crit_ch.send(
-                            f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
-                        )
-                    except discord.DiscordServerError:
-                        pass
+                # VCクリティカル発生時に通知
+                if crit_name_vc:
+                    ch_id = get_level_channel_id(guild_id)
+                    crit_ch = member.guild.get_channel(ch_id) if ch_id else None
+                    if crit_ch:
+                        try:
+                            await crit_ch.send(
+                                f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                            )
+                        except discord.DiscordServerError:
+                            pass
 
-            await check_level_up(member, data, user_id)
-            save_data(guild_id, data)
+                await check_level_up(member, data, user_id)
+                save_data(guild_id, data)
 
             boss = load_boss(guild_id)
             if boss.get("active"):
@@ -1800,6 +1810,17 @@ async def alldata_error(interaction: discord.Interaction, error):
 # =========================
 # 週間ランキング（全サーバー）
 # =========================
+@tasks.loop(minutes=10)
+async def cleanup_spam_cache():
+    """古いスパムキャッシュエントリを削除してメモリリークを防ぐ"""
+    current_time = time.time()
+    to_delete = [
+        ck for ck, times in list(spam_message_times.items())
+        if not times or current_time - max(times) > 60
+    ]
+    for ck in to_delete:
+        del spam_message_times[ck]
+
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
@@ -4796,6 +4817,8 @@ async def on_ready():
         daily_mission_announce_task.start()
     if not server_link_boss_expiry_task.is_running():
         server_link_boss_expiry_task.start()
+    if not cleanup_spam_cache.is_running():
+        cleanup_spam_cache.start()
 
     # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
