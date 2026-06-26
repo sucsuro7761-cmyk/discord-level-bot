@@ -285,17 +285,26 @@ def config_file():
 # =========================
 # Config read/write（通知チャンネルID保存）
 # =========================
-def load_config():
+_config_cache: dict | None = None
+
+def load_config() -> dict:
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
     path = config_file()
     if not os.path.exists(path):
-        return {}
+        _config_cache = {}
+        return _config_cache
     with open(path, "r") as f:
         try:
-            return json.load(f)
+            _config_cache = json.load(f)
         except json.JSONDecodeError:
-            return {}
+            _config_cache = {}
+    return _config_cache
 
-def save_config(config):
+def save_config(config: dict) -> None:
+    global _config_cache
+    _config_cache = config
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(config_file(), "w") as f:
         json.dump(config, f, indent=4)
@@ -468,7 +477,11 @@ def ensure_user_data(data, user_id):
     info.setdefault("buffs", {})
     info.setdefault("coin_daily_earned", 0)
     info.setdefault("coin_total_spent", 0)
-    info.setdefault("decay_warning_days", 0)  # 維持条件を下回り続けた日数
+    info.setdefault("weekly_coins_earned", 0)
+    info.setdefault("weekly_coins_spent", 0)
+    info.setdefault("last_active_date", "")
+    info.setdefault("level_down_streak", 0)
+    info.setdefault("decay_warning_days", 0)
     return info
 
 def spend_coins(data, user_id, amount, reason="spend"):
