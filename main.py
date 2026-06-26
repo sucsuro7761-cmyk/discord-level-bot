@@ -18,115 +18,45 @@ import pytz
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 
+from utils.constants import (
+    DECAY_PERCENT, LAST_DECAY_KEY, DATA_DIR, JST,
+    BOT_ADMIN_IDS, is_bot_admin, COIN_DAILY_CAP, SHOP_ITEMS,
+    CRIT_TABLE_TEXT, CRIT_TABLE_VC, CRIT_TABLE, calc_crit,
+    BOSS_BASE_HP, BOSS_HP_SCALE,
+    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_CLEAR_ROLE,
+    EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
+    GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
+    rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
+)
+from utils.config import (
+    load_config, save_config, load_shop_log, save_shop_log,
+    get_level_channel_id, set_level_channel_id,
+    get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
+    get_notification_role_id, set_notification_role_id, clear_notification_role_id,
+)
+from utils.data import (
+    data_file, boss_file, event_boss_file, get_data_lock,
+    load_data, save_data, load_boss, save_boss,
+    load_global_event_boss, save_global_event_boss,
+    load_event_boss, save_event_boss,
+    ensure_user_data, now_ts, spend_coins, cleanup_expired_buffs, add_timed_buff,
+    get_today_mission, get_mission_progress, add_mission_progress,
+)
+from utils.boost import (
+    get_boost, set_time_boost, set_boss_boost,
+    guild_time_boost, guild_boss_boost,
+)
+
 # =========================
 # Config
 # =========================
-DECAY_PERCENT = 0.05
-LAST_DECAY_KEY = "last_decay"
-DATA_DIR = "/data"
-JST = pytz.timezone("Asia/Tokyo")
 
 # bot管理者ID（環境変数 BOT_ADMIN_IDS にカンマ区切りで設定）
-_raw_admin_ids = os.environ.get("BOT_ADMIN_IDS", "1118472855865266246")
-BOT_ADMIN_IDS = set(int(i.strip()) for i in _raw_admin_ids.split(",") if i.strip().isdigit())
 
-def is_bot_admin(user_id: int) -> bool:
-    return user_id in BOT_ADMIN_IDS
 # =========================
 # Coin / Shop Config
 # =========================
-COIN_DAILY_CAP = 1500
 
-SHOP_ITEMS = {
-    "xp_small": {
-        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u5c0f\uff09",
-        "price": 1500,
-        "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
-        "buff_type": "xp_multiplier",
-        "value": 1.5,
-        "duration": 10 * 60,
-    },
-    "xp_medium": {
-        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u4e2d\uff09",
-        "price": 2000,
-        "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
-        "buff_type": "xp_multiplier",
-        "value": 2.0,
-        "duration": 10 * 60,
-    },
-    "daily_boost": {
-        "name": "\u30c7\u30a4\u30ea\u30fc\u5f37\u5316",
-        "price": 1000,
-        "description": "\u30c7\u30a4\u30ea\u30fc\u5831\u916c\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0824\u6642\u9593\uff09",
-        "buff_type": "daily_multiplier",
-        "value": 1.5,
-        "duration": 24 * 60 * 60,
-    },
-    "attack_up": {
-        "name": "\u653b\u6483\u529b\u30a2\u30c3\u30d7",
-        "price": 1000,
-        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0860\u5206\uff09",
-        "buff_type": "damage_multiplier",
-        "value": 1.2,
-        "duration": 60 * 60,
-    },
-    "crit_up": {
-        "name": "クリティカル強化",
-        "price": 5000,
-        "description": "クリティカル発生率がアップ！獲得XPに超高倍率ダメージ（15分）",
-        "buff_type": "crit_bonus",
-        "value": True,
-        "duration": 15 * 60,
-    },
-    "boss_slayer": {
-        "name": "ボス特効",
-        "price": 2000,
-        "description": "ボスへのダメージが1.3倍になります（15分）",
-        "buff_type": "boss_damage_multiplier",
-        "value": 1.3,
-        "duration": 15 * 60,
-    },
-    "decay_guard": {
-        "name": "🛡️ XP減衰ガード",
-        "price": 2500,
-        "description": "購入した日のXP自然減衰を無効化します（1日限定）",
-        "buff_type": "decay_guard",
-        "value": True,
-        "duration": 24 * 60 * 60,
-    },
-    "rankdown_shield": {
-        "name": "🔰 ランクダウン防止シールド",
-        "price": 5000,
-        "description": "次の1回のランクダウンを無効化します（使い切り）",
-        "buff_type": "rankdown_shield",
-        "value": True,
-        "duration": None,
-    },
-    "royal_pass": {
-        "name": "👑 ROYAL PASS",
-        "price": 50000,
-        "description": "XP+20%・デイリー報酬+50%・特別ロール付与（7日間）",
-        "buff_type": "royal_pass",
-        "value": True,
-        "duration": 7 * 24 * 60 * 60,
-    },
-    "mystery_box": {
-        "name": "🎁 ミステリーボックス",
-        "price": 3000,
-        "description": "開けると何かが飛び出す！ランダム報酬ボックス（専用コマンド /openbox で使用）",
-        "buff_type": None,
-        "value": None,
-        "duration": None,
-    },
-    "investment_pack": {
-        "name": "📈 投資パック",
-        "price": 3000,
-        "description": "500〜50,000コインを投資！24時間後に /claiminvest で回収（専用コマンド /invest で購入）",
-        "buff_type": None,
-        "value": None,
-        "duration": None,
-    },
-}
 
 # =========================
 # クリティカルシステム
@@ -143,36 +73,10 @@ SHOP_ITEMS = {
 # 超CT:   バフあり0.25%  / バフなし0.125% → ×25
 # 超+CT:  バフあり0.05%/ バフなし0.025% → ×50
 
-CRIT_TABLE_TEXT = [
-    # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
-    ("超+CT", 0.001,  0.0005,  50, "💥"),
-    ("超CT",  0.005,  0.0025,  25, "⚡"),
-    ("CT",    0.03,   0.015,   10, "🔥"),
-    ("ミニCT",0.05,   0.025,    5, "✨"),
-]
 
-CRIT_TABLE_VC = [
-    # テキストの半分の確率
-    ("超+CT", 0.0005,  0.00025,  50, "💥"),
-    ("超CT",  0.0025,  0.00125,  25, "⚡"),
-    ("CT",    0.015,   0.0075,   10, "🔥"),
-    ("ミニCT",0.025,   0.0125,    5, "✨"),
-]
 
 # 後方互換用（テキストをデフォルトとして残す）
-CRIT_TABLE = CRIT_TABLE_TEXT
 
-def calc_crit(base_xp, has_crit_buff, is_vc=False):
-    """クリティカル判定を行い (最終XP, クリット名orNone, 倍率) を返す"""
-    table = CRIT_TABLE_VC if is_vc else CRIT_TABLE_TEXT
-    r = random.random()
-    cumulative = 0.0
-    for name, prob_buff, prob_normal, multiplier, emoji in table:
-        prob = prob_buff if has_crit_buff else prob_normal
-        cumulative += prob
-        if r < cumulative:
-            return int(base_xp * multiplier), f"{emoji} {name}！", multiplier
-    return base_xp, None, 1
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -192,12 +96,7 @@ spam_message_times = {}
 # 寝落ち管理: { "guild_id:user_id": True } → XP停止フラグ
 vc_afk_flags = {}
 # ギルドごとのデータ競合防止ロック
-_data_locks: dict[int, asyncio.Lock] = {}
 
-def get_data_lock(guild_id: int) -> asyncio.Lock:
-    if guild_id not in _data_locks:
-        _data_locks[guild_id] = asyncio.Lock()
-    return _data_locks[guild_id]
 
 # 最後にVCでXPを獲得した時刻（90分チェック用）: { "guild_id:user_id": timestamp }
 vc_last_xp_time = {}
@@ -206,24 +105,10 @@ vc_last_xp_time = {}
 # XP BOOST SYSTEM（サーバーごと・独立管理）
 # =========================
 # 時間帯ブースト: { guild_id: multiplier }  1=無効
-guild_time_boost = {}
 # ボス討伐ブースト: { guild_id: multiplier }  1=無効
-guild_boss_boost = {}
 
-def get_boost(guild_id):
-    """2つのブーストを掛け合わせた最終倍率を返す"""
-    time_m = guild_time_boost.get(guild_id, 1)
-    boss_m = guild_boss_boost.get(guild_id, 1)
-    total = time_m * boss_m
-    return {"multiplier": total, "active": total > 1}
 
-def set_time_boost(guild_id, multiplier):
-    """時間帯ブーストをセット（1=無効）"""
-    guild_time_boost[guild_id] = multiplier
 
-def set_boss_boost(guild_id, multiplier):
-    """ボス討伐ブーストをセット（1=無効）"""
-    guild_boss_boost[guild_id] = multiplier
 
 # =========================
 # 二重実行防止フラグ（サーバーごと）
@@ -235,8 +120,6 @@ _boss_spawn_announced = {} # { guild_id: date_str }
 # =========================
 # 週ボスシステム Config
 # =========================
-BOSS_BASE_HP = 30000
-BOSS_HP_SCALE = 1.2
 
 def find_member_globally(bot, user_id: int):
     """全サーバーからメンバーを検索して返す。見つからなければNone。"""
@@ -251,18 +134,10 @@ def get_member_name(bot, uid: str) -> str:
     member = find_member_globally(bot, int(uid))
     return member.display_name if member else f"ID:{uid}"
 
-def get_boss_clear_role_name(cleared: int) -> str:
-    """討伐回数からロール名を生成（LV〇〇ボス討伐者）"""
-    return f"⚔️ LV{cleared}ボス討伐者"
 
 # =========================
 # イベントボス Config
 # =========================
-EVENT_BOSS_DEFAULT_HP = 150000    # デフォルトHP（管理者が指定可能）
-EVENT_BOSS_CLEAR_ROLE = "👑BOSS VIP"
-EVENT_BOSS_CONSECUTIVE_CLEARS = 5  # 累計クリア数で発動
-EVENT_BOSS_BOOST_MULTIPLIER = 3    # 討伐後のXP倍率（デフォルト）
-EVENT_BOSS_BOOST_DAYS = 7          # ブースト日数（デフォルト）
 
 # イベントボス状態 { guild_id: bool }
 event_boss_active = {}
@@ -270,121 +145,26 @@ event_boss_active = {}
 # =========================
 # ファイルパス（サーバーごと）
 # =========================
-def data_file(guild_id):
-    return f"{DATA_DIR}/levels_{guild_id}.json"
 
-def boss_file(guild_id):
-    return f"{DATA_DIR}/boss_{guild_id}.json"
 
-def event_boss_file(guild_id):
-    return f"{DATA_DIR}/event_boss_{guild_id}.json"
 
-def config_file():
-    return f"{DATA_DIR}/config.json"
 
 # =========================
 # Config read/write（通知チャンネルID保存）
 # =========================
-_config_cache: dict | None = None
 
-def load_config() -> dict:
-    global _config_cache
-    if _config_cache is not None:
-        return _config_cache
-    path = config_file()
-    if not os.path.exists(path):
-        _config_cache = {}
-        return _config_cache
-    with open(path, "r") as f:
-        try:
-            _config_cache = json.load(f)
-        except json.JSONDecodeError:
-            _config_cache = {}
-    return _config_cache
 
-def save_config(config: dict) -> None:
-    global _config_cache
-    _config_cache = config
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(config_file(), "w") as f:
-        json.dump(config, f, indent=4)
 
-def load_shop_log(guild_id):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
 
-def save_shop_log(guild_id, log):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(log, f, ensure_ascii=False, indent=2)
 
-def get_level_channel_id(guild_id):
-    config = load_config()
-    return config.get(str(guild_id), {}).get("level_channel_id")
 
-def set_level_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    config[gid]["level_channel_id"] = channel_id
-    save_config(config)
 
-def get_xp_channel_ids(guild_id):
-    """XPを獲得できるチャンネルIDリストを返す（空=全チャンネル許可）"""
-    config = load_config()
-    return config.get(str(guild_id), {}).get("xp_channels", [])
 
-def add_xp_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    channels = config[gid].setdefault("xp_channels", [])
-    if channel_id not in channels:
-        channels.append(channel_id)
-    save_config(config)
 
-def remove_xp_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    channels = config.get(gid, {}).get("xp_channels", [])
-    if channel_id in channels:
-        channels.remove(channel_id)
-        config[gid]["xp_channels"] = channels
-        save_config(config)
-        return True
-    return False
 
-def clear_xp_channels(guild_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid in config:
-        config[gid]["xp_channels"] = []
-        save_config(config)
 
-def get_notification_role_id(guild_id):
-    """通知メンション対象ロールIDを返す（未設定=None）"""
-    config = load_config()
-    return config.get(str(guild_id), {}).get("notification_role_id")
 
-def set_notification_role_id(guild_id, role_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    config[gid]["notification_role_id"] = role_id
-    save_config(config)
 
-def clear_notification_role_id(guild_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid in config and "notification_role_id" in config[gid]:
-        del config[gid]["notification_role_id"]
-        save_config(config)
 
 def get_notification_mention(guild):
     """通知ロールが設定されていればそのメンション文字列、未設定なら空文字を返す"""
@@ -438,100 +218,19 @@ async def setup_notification_panel_channel(guild):
 # =========================
 # Data read/write（サーバーごと）
 # =========================
-def load_data(guild_id):
-    path = data_file(guild_id)
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
 
-def save_data(guild_id, data):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(data_file(guild_id), "w") as f:
-        json.dump(data, f, indent=4)
 # =========================
 # Coin / Buff helpers
 # =========================
-def now_ts():
-    return int(time.time())
 
-def ensure_user_data(data, user_id):
-    if user_id not in data:
-        data[user_id] = {}
 
-    info = data[user_id]
-    info.setdefault("xp", 0)
-    info.setdefault("level", 1)
-    info.setdefault("last_daily", "")
-    info.setdefault("weekly_xp", 0)
-    info.setdefault("login_streak", 0)
-    info.setdefault("weekly_chat_xp", 0)
-    info.setdefault("weekly_vc_xp", 0)
-    info.setdefault("weekly_active_days", [])
-    info.setdefault("last_weekly_xp", 0)
-    info.setdefault("last_weekly_rank", 0)
-    info.setdefault("coins", 0)
-    info.setdefault("buffs", {})
-    info.setdefault("coin_daily_earned", 0)
-    info.setdefault("coin_total_spent", 0)
-    info.setdefault("weekly_coins_earned", 0)
-    info.setdefault("weekly_coins_spent", 0)
-    info.setdefault("last_active_date", "")
-    info.setdefault("level_down_streak", 0)
-    info.setdefault("decay_warning_days", 0)
-    return info
 
-def spend_coins(data, user_id, amount, reason="spend"):
-    info = ensure_user_data(data, user_id)
-    amount = int(amount)
-    if amount <= 0 or info.get("coins", 0) < amount:
-        return False
 
-    info["coins"] -= amount
-    info["coin_total_spent"] = info.get("coin_total_spent", 0) + amount
-    return True
-
-def cleanup_expired_buffs(info):
-    current = now_ts()
-    buffs = info.setdefault("buffs", {})
-    expired = [key for key, buff in buffs.items() if buff.get("expires_at", 0) <= current]
-    for key in expired:
-        del buffs[key]
-
-def add_timed_buff(info, buff_type, value, duration_seconds, item_id):
-    cleanup_expired_buffs(info)
-    current = now_ts()
-    buffs = info.setdefault("buffs", {})
-    old = buffs.get(buff_type)
-    expires_at = current + int(duration_seconds)
-    if old and old.get("expires_at", 0) > current:
-        expires_at = max(old["expires_at"], current) + int(duration_seconds)
-    buffs[buff_type] = {
-        "value": value,
-        "expires_at": expires_at,
-        "item_id": item_id,
-    }
 
 # =========================
 # Boss read/write（サーバーごと）
 # =========================
-def load_boss(guild_id):
-    path = boss_file(guild_id)
-    if not os.path.exists(path):
-        return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
 
-def save_boss(guild_id, boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(boss_file(guild_id), "w") as f:
-        json.dump(boss, f, indent=4)
 
 # =========================
 # Flask keep alive
@@ -552,26 +251,8 @@ def keep_alive():
 # =========================
 # Rank definitions
 # =========================
-rank_roles = [
-    (1, 9, "MEMBER Lite"),
-    (10, 29, "MEMBER"),
-    (30, 49, "CORE"),
-    (50, 74, "SELECT"),
-    (75, 99, "PREMIUM"),
-    (100, 199, "VIP Lite"),
-    (200, 499, "VIP"),
-    (500, 9999, "Legend")
-]
 
-permanent_roles = {
-    3: "PHOTO+"
-}
 
-weekly_roles = {
-    1: "🥇週間王者",
-    2: "🥈週間準王",
-    3: "🥉週間三位"
-}
 
 # =========================
 # Rank Role Updater
@@ -2226,36 +1907,10 @@ async def weekly_mid_announcement():
 # =========================
 # イベントボス read/write
 # =========================
-GLOBAL_EVENT_BOSS_FILE = os.path.join(DATA_DIR, "global_event_boss.json")
 
-def load_global_event_boss():
-    if os.path.exists(GLOBAL_EVENT_BOSS_FILE):
-        with open(GLOBAL_EVENT_BOSS_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                pass
-    return {"active": False, "hp": 0, "max_hp": 0, "name": "", "damage": {}, "boost_days": 7, "boost_multiplier": 3}
 
-def save_global_event_boss(boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(GLOBAL_EVENT_BOSS_FILE, "w", encoding="utf-8") as f:
-        json.dump(boss, f, ensure_ascii=False, indent=2)
 
-def load_event_boss(guild_id):
-    path = event_boss_file(guild_id)
-    if not os.path.exists(path):
-        return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
 
-def save_event_boss(guild_id, boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(event_boss_file(guild_id), "w") as f:
-        json.dump(boss, f, indent=4)
 
 # =========================
 # イベントボス：自動発動チェック（通常ボスクリア時に呼ぶ）
@@ -2852,37 +2507,9 @@ async def chest(interaction: discord.Interaction):
 # 曜日別デイリーミッション定義
 # =========================
 # weekday(): 0=月 1=火 2=水 3=木 4=金 5=土 6=日
-DAILY_MISSIONS = {
-    0: {"label": "💬 メッセージを5回送る",       "type": "msg_count",    "goal": 5,   "reward": 100},
-    1: {"label": "💬 メッセージを10回送る",      "type": "msg_count",    "goal": 10,  "reward": 200},
-    2: {"label": "🎙️ VCに30分滞在する",         "type": "vc_minutes",   "goal": 30,  "reward": 200},
-    3: {"label": "⚔️ ボスに300ダメージ与える",   "type": "boss_damage",  "goal": 300, "reward": 500},
-    4: {"label": "🎁 チェストを3回開ける",       "type": "chest_count",  "goal": 3,   "reward": 300},
-    5: {"label": "📈 投資パックを購入する",      "type": "invest_done",  "goal": 1,   "reward": 500},
-    6: {"label": "⭐ XPを500獲得する",           "type": "xp_gained",    "goal": 500, "reward": 300},
-}
 
-def get_today_mission():
-    """今日の曜日のミッションを返す"""
-    weekday = datetime.now(JST).weekday()
-    return DAILY_MISSIONS[weekday]
 
-def get_mission_progress(info, mission_type):
-    """ミッション進捗を返す"""
-    today = datetime.now(JST).strftime("%Y-%m-%d")
-    progress = info.get("daily_mission_progress", {})
-    if progress.get("date") != today:
-        return 0
-    return progress.get(mission_type, 0)
 
-def add_mission_progress(info, mission_type, amount=1):
-    """ミッション進捗を加算する"""
-    today = datetime.now(JST).strftime("%Y-%m-%d")
-    progress = info.get("daily_mission_progress", {})
-    if progress.get("date") != today:
-        progress = {"date": today}
-    progress[mission_type] = progress.get(mission_type, 0) + amount
-    info["daily_mission_progress"] = progress
 
 # =========================
 # /dailymission（曜日別デイリーミッション確認・受取）
