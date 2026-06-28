@@ -334,6 +334,7 @@ class ShopCog(commands.Cog):
         info["coin_daily_earned"]   = today_earned + reward_coins
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + reward_coins
         info["daily_mission_claimed"] = today
+        info["weekly_missions_completed"] = info.get("weekly_missions_completed", 0) + 1
         save_data(guild_id, data)
 
         embed = discord.Embed(

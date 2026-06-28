@@ -147,6 +147,16 @@ def set_active_title(guild_id, title_id: str | None) -> None:
     config.setdefault(gid, {})["active_title"] = title_id
     save_config(config)
 
+def get_champion_streak(guild_id) -> int:
+    config = load_config()
+    return config.get(str(guild_id), {}).get("champion_streak", 0)
+
+def set_champion_streak(guild_id, count: int) -> None:
+    config = load_config()
+    gid = str(guild_id)
+    config.setdefault(gid, {})["champion_streak"] = count
+    save_config(config)
+
 def resolve_display_title(guild_id) -> str | None:
     """表示する称号IDを返す。ランダムモード時は今日の日付でキャッシュして1日1回切り替わる。"""
     active = get_active_title(guild_id)

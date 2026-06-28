@@ -188,37 +188,142 @@ weekly_roles = {
 # 称号定義
 # =========================
 # trigger の種類:
-#   "on_join"      : bot 導入時に即時付与
-#   "boss_defeat"  : ボス討伐時にチェック（threshold = 必要討伐回数）
-#   "weekly_reset" : 週間リセット時にチェック
+#   "on_join"           : bot 導入時に即時付与
+#   "boss_defeat"       : ボス討伐時にチェック（threshold = 必要討伐回数）
+#   "event_boss_defeat" : イベントボス討伐時に即時付与
+#   "weekly_reset"      : 週間リセット時にチェック（condition フィールドで条件種別を指定）
+#
+# 新しい称号を追加するには TITLE_DEFINITIONS に1エントリ追加し、
+# 対応する trigger の処理箇所で add_earned_title() を呼ぶだけ。
 TITLE_DEFINITIONS: dict[str, dict] = {
+    # ===== Common =====
     "newcomer": {
         "name": "🌱 新参者",
         "description": "むれちゃんbotを導入した",
         "trigger": "on_join",
+        "rarity": "common",
     },
-    "weekly_champion": {
-        "name": "👑 週間王者サーバー",
-        "description": "サーバー対抗週間XPランキングで1位を獲得",
+    "lively_village": {
+        "name": "💬 にぎやか村",
+        "description": "週間アクティブメンバー（XP500以上）が5人以上",
         "trigger": "weekly_reset",
+        "condition": "active_members_500",
+        "threshold": 5,
+        "rarity": "common",
     },
+    "persistence": {
+        "name": "📅 継続は力",
+        "description": "ボスを3回討伐した",
+        "trigger": "boss_defeat",
+        "threshold": 3,
+        "rarity": "common",
+    },
+    "coin_lover": {
+        "name": "💰 コイン好き",
+        "description": "週間コイン獲得が合計10,000コイン以上",
+        "trigger": "weekly_reset",
+        "condition": "weekly_coins",
+        "threshold": 10000,
+        "rarity": "common",
+    },
+    # ===== Rare =====
     "boss_hunter": {
         "name": "⚔️ ボスハンター",
         "description": "サーバーで初めてボスを討伐した",
         "trigger": "boss_defeat",
         "threshold": 1,
+        "rarity": "rare",
     },
-    "boss_master": {
-        "name": "💀 ボスマスター",
-        "description": "ボスを通算10回討伐した",
-        "trigger": "boss_defeat",
-        "threshold": 10,
+    "weekly_champion": {
+        "name": "👑 週間王者サーバー",
+        "description": "サーバー対抗週間XPランキングで1位を獲得",
+        "trigger": "weekly_reset",
+        "condition": "xp_champion",
+        "rarity": "rare",
     },
     "rich_community": {
         "name": "💰 リッチコミュニティ",
         "description": "週間コイン獲得が合計50,000コイン以上",
         "trigger": "weekly_reset",
+        "condition": "weekly_coins",
         "threshold": 50000,
+        "rarity": "rare",
+    },
+    "fever_server": {
+        "name": "🔥 熱狂のサーバー",
+        "description": "週間アクティブメンバー（XP500以上）が15人以上",
+        "trigger": "weekly_reset",
+        "condition": "active_members_500",
+        "threshold": 15,
+        "rarity": "rare",
+    },
+    "mission_master": {
+        "name": "🎯 ミッションマスター",
+        "description": "週間でデイリーミッション達成者が5人以上",
+        "trigger": "weekly_reset",
+        "condition": "weekly_missions",
+        "threshold": 5,
+        "rarity": "rare",
+    },
+    # ===== Epic =====
+    "boss_master": {
+        "name": "💀 ボスマスター",
+        "description": "ボスを通算10回討伐した",
+        "trigger": "boss_defeat",
+        "threshold": 10,
+        "rarity": "epic",
+    },
+    "xp_tyrant": {
+        "name": "⚡ XPの暴君",
+        "description": "週間サーバー総XPが100,000以上",
+        "trigger": "weekly_reset",
+        "condition": "weekly_xp_total",
+        "threshold": 100000,
+        "rarity": "epic",
+    },
+    "legend_server": {
+        "name": "🏰 レジェンドサーバー",
+        "description": "Legendランク（LV500以上）のメンバーが1人以上いる",
+        "trigger": "weekly_reset",
+        "condition": "has_legend",
+        "rarity": "epic",
+    },
+    "night_castle": {
+        "name": "🌙 不夜城",
+        "description": "週間VCで獲得したXP合計が10,000以上",
+        "trigger": "weekly_reset",
+        "condition": "weekly_vc_xp",
+        "threshold": 10000,
+        "rarity": "epic",
+    },
+    # ===== Legendary =====
+    "triple_crown": {
+        "name": "👑 三冠王",
+        "description": "週間XPと週間コイン獲得の両方でサーバー1位",
+        "trigger": "weekly_reset",
+        "condition": "triple_crown",
+        "rarity": "legendary",
+    },
+    "undefeated_king": {
+        "name": "💎 無敗の王者",
+        "description": "週間XPランキング1位を3週連続",
+        "trigger": "weekly_reset",
+        "condition": "champion_streak",
+        "threshold": 3,
+        "rarity": "legendary",
+    },
+    "legend_slayer": {
+        "name": "🌟 伝説のサーバー",
+        "description": "ボスを50回討伐した",
+        "trigger": "boss_defeat",
+        "threshold": 50,
+        "rarity": "legendary",
+    },
+    "demon_king_slayer": {
+        "name": "☠️ 魔王殺し",
+        "description": "イベントボスを討伐した",
+        "trigger": "event_boss_defeat",
+        "rarity": "legendary",
     },
 }
 

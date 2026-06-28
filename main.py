@@ -35,7 +35,7 @@ from utils.config import (
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
     get_earned_titles, add_earned_title, get_active_title, set_active_title,
-    resolve_display_title,
+    resolve_display_title, get_champion_streak, set_champion_streak,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -1385,13 +1385,26 @@ async def weekly_ranking_task():
     server_xp_list = [
         (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
     ]
+    server_coin_list = []
+    for g in bot.guilds:
+        gdata = load_data(g.id)
+        total_coins = sum(
+            info.get("weekly_coins_earned", 0)
+            for uid, info in gdata.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        server_coin_list.append((g, total_coins))
+
+    xp_champion_guild = None
+    coin_champion_guild = None
+
     if server_xp_list:
-        champion_guild = max(server_xp_list, key=lambda x: x[1])
-        if champion_guild[1] > 0:
-            ch_guild, _ = champion_guild
-            is_new = add_earned_title(ch_guild.id, "weekly_champion")
-            ch_id = get_level_channel_id(ch_guild.id)
-            notify_ch = ch_guild.get_channel(ch_id) if ch_id else None
+        champion_entry = max(server_xp_list, key=lambda x: x[1])
+        if champion_entry[1] > 0:
+            xp_champion_guild = champion_entry[0]
+            is_new = add_earned_title(xp_champion_guild.id, "weekly_champion")
+            ch_id = get_level_channel_id(xp_champion_guild.id)
+            notify_ch = xp_champion_guild.get_channel(ch_id) if ch_id else None
             if notify_ch:
                 defn = TITLE_DEFINITIONS["weekly_champion"]
                 msg = (
@@ -1400,6 +1413,49 @@ async def weekly_ranking_task():
                     f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
                 )
                 await notify_ch.send(msg)
+
+    if server_coin_list:
+        coin_entry = max(server_coin_list, key=lambda x: x[1])
+        if coin_entry[1] > 0:
+            coin_champion_guild = coin_entry[0]
+
+    # triple_crown: 週間XPと週間コイン獲得の両方で1位
+    if (
+        xp_champion_guild is not None
+        and coin_champion_guild is not None
+        and xp_champion_guild.id == coin_champion_guild.id
+    ):
+        is_new = add_earned_title(xp_champion_guild.id, "triple_crown")
+        if is_new:
+            ch_id = get_level_channel_id(xp_champion_guild.id)
+            notify_ch = xp_champion_guild.get_channel(ch_id) if ch_id else None
+            if notify_ch:
+                defn = TITLE_DEFINITIONS["triple_crown"]
+                await notify_ch.send(
+                    f"👑 **伝説の称号獲得！**\n"
+                    f"**{defn['name']}** — {defn['description']}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
+
+    # champion_streak と undefeated_king: 全サーバーのストリーク更新
+    for g in bot.guilds:
+        if xp_champion_guild is not None and g.id == xp_champion_guild.id:
+            new_streak = get_champion_streak(g.id) + 1
+            set_champion_streak(g.id, new_streak)
+            if new_streak >= TITLE_DEFINITIONS["undefeated_king"]["threshold"]:
+                is_new = add_earned_title(g.id, "undefeated_king")
+                if is_new:
+                    ch_id = get_level_channel_id(g.id)
+                    notify_ch = g.get_channel(ch_id) if ch_id else None
+                    if notify_ch:
+                        defn = TITLE_DEFINITIONS["undefeated_king"]
+                        await notify_ch.send(
+                            f"💎 **伝説の称号獲得！**\n"
+                            f"**{defn['name']}** — {defn['description']}\n"
+                            f"`/settitle` で表示する称号を設定できます！"
+                        )
+        else:
+            set_champion_streak(g.id, 0)
 
     for guild in bot.guilds:
         gid = guild.id
@@ -1476,22 +1532,64 @@ async def weekly_ranking_task():
             )
             await notify_channel.send(embed=embed_act)
 
-        # 週間コイン獲得合計チェック → rich_community 称号
-        rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
-        total_weekly_coins = sum(
-            info.get("weekly_coins_earned", 0)
-            for uid, info in data.items()
+        # ===== 週間称号チェック（データリセット前に実施）=====
+        members_only = {
+            uid: info for uid, info in data.items()
             if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        }
+
+        # 週間合計値
+        total_weekly_xp   = sum(info.get("weekly_xp", 0) for info in members_only.values())
+        total_weekly_coins = sum(info.get("weekly_coins_earned", 0) for info in members_only.values())
+        total_weekly_vc_xp = sum(info.get("weekly_vc_xp", 0) for info in members_only.values())
+        active_members_500 = sum(1 for info in members_only.values() if info.get("weekly_xp", 0) >= 500)
+        mission_achievers  = sum(
+            1 for info in members_only.values()
+            if info.get("weekly_missions_completed", 0) >= 1
         )
-        if total_weekly_coins >= rich_threshold:
-            is_new = add_earned_title(gid, "rich_community")
+        has_legend = any(info.get("level", 0) >= 500 for info in members_only.values())
+
+        async def _award_title(tid: str):
+            is_new = add_earned_title(gid, tid)
             if is_new and notify_channel:
-                defn = TITLE_DEFINITIONS["rich_community"]
+                defn = TITLE_DEFINITIONS[tid]
                 await notify_channel.send(
-                    f"💰 **新しい称号を獲得しました！**\n"
+                    f"🏅 **新しい称号を獲得しました！**\n"
                     f"**{defn['name']}** — {defn['description']}\n"
                     f"`/settitle` で表示する称号を設定できます！"
                 )
+
+        # coin_lover (common): 週間コイン合計 10,000以上
+        if total_weekly_coins >= TITLE_DEFINITIONS["coin_lover"]["threshold"]:
+            await _award_title("coin_lover")
+
+        # rich_community (rare): 週間コイン合計 50,000以上
+        if total_weekly_coins >= TITLE_DEFINITIONS["rich_community"]["threshold"]:
+            await _award_title("rich_community")
+
+        # lively_village (common): 週間アクティブメンバー 5人以上
+        if active_members_500 >= TITLE_DEFINITIONS["lively_village"]["threshold"]:
+            await _award_title("lively_village")
+
+        # fever_server (rare): 週間アクティブメンバー 15人以上
+        if active_members_500 >= TITLE_DEFINITIONS["fever_server"]["threshold"]:
+            await _award_title("fever_server")
+
+        # mission_master (rare): 週間ミッション達成者 5人以上
+        if mission_achievers >= TITLE_DEFINITIONS["mission_master"]["threshold"]:
+            await _award_title("mission_master")
+
+        # xp_tyrant (epic): 週間サーバー総XP 100,000以上
+        if total_weekly_xp >= TITLE_DEFINITIONS["xp_tyrant"]["threshold"]:
+            await _award_title("xp_tyrant")
+
+        # night_castle (epic): 週間VC XP合計 10,000以上
+        if total_weekly_vc_xp >= TITLE_DEFINITIONS["night_castle"]["threshold"]:
+            await _award_title("night_castle")
+
+        # legend_server (epic): Legendランク（LV500以上）のメンバーが1人以上
+        if has_legend:
+            await _award_title("legend_server")
 
         for uid in data:
             if uid != LAST_DECAY_KEY:
@@ -1502,6 +1600,7 @@ async def weekly_ranking_task():
                 data[uid]["weekly_coins_spent"] = 0
                 data[uid]["weekly_coins_earned"] = 0
                 data[uid]["coin_daily_earned"] = 0
+                data[uid]["weekly_missions_completed"] = 0
         save_data(gid, data)
 
 # =========================
@@ -2007,6 +2106,16 @@ async def handle_event_boss_clear(guild, event_boss):
 
     # XPブーストを設定
     asyncio.create_task(event_boss_boost(guild, notify_channel, boost_multi, boost_days))
+
+    # demon_king_slayer 称号付与（イベントボス討伐）
+    is_new_title = add_earned_title(gid, "demon_king_slayer")
+    if is_new_title and notify_channel:
+        defn = TITLE_DEFINITIONS["demon_king_slayer"]
+        await notify_channel.send(
+            f"☠️ **伝説の称号獲得！**\n"
+            f"**{defn['name']}** — {defn['description']}\n"
+            f"`/settitle` で表示する称号を設定できます！"
+        )
 
     # イベントボスをリセット・連続クリア数もリセット
     reset_event = load_event_boss(gid)
