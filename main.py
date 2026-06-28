@@ -2362,6 +2362,75 @@ async def boss_damage_report():
                 pass
 
 
+# =========================
+# 週ボス：ラストチャンス通知（日曜22時）
+# ボスがまだ生きている場合のみ通知
+# =========================
+_boss_last_chance_fired = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def boss_last_chance_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+
+    if not (now.weekday() == 6 and now.hour == 22 and now.minute == 0):
+        return
+
+    today = now.strftime("%Y-%m-%d")
+    if _boss_last_chance_fired.get(today):
+        return
+    _boss_last_chance_fired[today] = True
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    for guild in bot.guilds:
+        gid = guild.id
+        boss = load_boss(gid)
+
+        if not boss.get("active"):
+            continue  # 既に討伐済みなら通知しない
+
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if not notify_channel:
+            continue
+
+        max_hp     = boss.get("max_hp", 1)
+        current_hp = boss.get("hp", 0)
+        progress   = (max_hp - current_hp) / max_hp
+        bar        = "█" * int(20 * progress) + "░" * (20 - int(20 * progress))
+        percent    = int(progress * 100)
+
+        sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
+        top_text = "\n".join(
+            f"{medals[i]} <@{uid}> - {dmg:,}ダメージ"
+            for i, (uid, dmg) in enumerate(sorted_dmg[:3])
+        ) or "まだ誰も攻撃していません！"
+
+        embed = discord.Embed(
+            title="⏰ ラストチャンス！今夜中にボスを倒せ！",
+            description=(
+                f"月曜**6:00**にリセット！残り約**8時間**！\n\n"
+                f"討伐できないとボスが**20%回復**して翌週も出現します…\n"
+                f"今すぐメッセージを送って攻撃しよう！"
+            ),
+            color=discord.Color.orange()
+        )
+        embed.add_field(
+            name="❤️ 残りHP",
+            value=f"`{bar}` {percent}%削った！\n{current_hp:,} / {max_hp:,}",
+            inline=False
+        )
+        embed.add_field(name="🏆 現在のTOP3", value=top_text, inline=False)
+        embed.set_footer(text="月曜6:00にリセット・倒せなかった場合はボスが20%回復して再出現")
+
+        try:
+            mention = get_notification_mention(guild)
+            await notify_channel.send(content=mention or None, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
 # 招待報酬（新規参加時に招待者へ500コイン）
 # =========================
 @bot.event
@@ -3729,6 +3798,8 @@ async def on_ready():
         boss_spawn_task.start()
     if not boss_damage_report.is_running():
         boss_damage_report.start()
+    if not boss_last_chance_task.is_running():
+        boss_last_chance_task.start()
     if not server_ranking_task.is_running():
         server_ranking_task.start()
     if not rankdown_check_task.is_running():
