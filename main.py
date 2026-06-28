@@ -23,7 +23,7 @@ from utils.constants import (
     BOT_ADMIN_IDS, is_bot_admin, COIN_DAILY_CAP, SHOP_ITEMS,
     CRIT_TABLE_TEXT, CRIT_TABLE_VC, CRIT_TABLE, calc_crit,
     BOSS_BASE_HP, BOSS_HP_SCALE, calc_boss_hp,
-    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_CLEAR_ROLE,
+    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_HP_MULTIPLIER, EVENT_BOSS_CLEAR_ROLE,
     EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
     GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
     rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
@@ -1824,14 +1824,19 @@ async def check_event_boss_trigger(guild, consecutive_clears):
 
     # トリガー条件チェック（累計クリア数が5の倍数に達したら発動）
     if consecutive_clears > 0 and consecutive_clears % EVENT_BOSS_CONSECUTIVE_CLEARS == 0:
-        await spawn_event_boss(guild, event_boss.get("name", "大魔王"))
+        await spawn_event_boss(guild, event_boss.get("name", "大魔王"), weekly_cleared=consecutive_clears)
 
-async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplier=None):
+async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplier=None, weekly_cleared=None):
     gid = guild.id
     ch_id = get_level_channel_id(gid)
     notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    event_hp = hp if hp else EVENT_BOSS_DEFAULT_HP
+    if hp is not None:
+        event_hp = hp
+    elif weekly_cleared is not None:
+        event_hp = int(calc_boss_hp(weekly_cleared) * EVENT_BOSS_HP_MULTIPLIER)
+    else:
+        event_hp = EVENT_BOSS_DEFAULT_HP
     boost_days = days if days else EVENT_BOSS_BOOST_DAYS
     boost_multi = boost_multiplier if boost_multiplier else EVENT_BOSS_BOOST_MULTIPLIER
 

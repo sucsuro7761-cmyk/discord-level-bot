@@ -167,7 +167,8 @@ def calc_boss_hp(cleared: int) -> int:
             hp = int(hp * 1.05)
     return hp
 
-EVENT_BOSS_DEFAULT_HP          = 150000
+EVENT_BOSS_DEFAULT_HP          = 150000  # 手動召喚時のデフォルト値
+EVENT_BOSS_HP_MULTIPLIER       = 1.5    # 自動出現時: 週ボスHP × この倍率
 EVENT_BOSS_CLEAR_ROLE          = "👑BOSS VIP"
 EVENT_BOSS_CONSECUTIVE_CLEARS  = 5
 EVENT_BOSS_BOOST_MULTIPLIER    = 3
