@@ -3206,8 +3206,9 @@ async def on_guild_join(guild):
 
     await setup_notification_panel_channel(guild)
 
-    # 導入記念称号を付与
+    # 導入記念称号を付与し、称号表示をランダムモードに初期設定
     add_earned_title(guild.id, "newcomer")
+    set_active_title(guild.id, "random")
 
     # ===== bot説明チャンネルを作成 =====
     desc_channel = None
@@ -4008,6 +4009,10 @@ async def on_ready():
             if existing:
                 set_level_channel_id(guild.id, existing.id)
                 print(f"[{guild.name}] レベル通知チャンネルを自動登録しました (ID: {existing.id})")
+
+        # 称号未設定のサーバーをランダムモードに初期化
+        if get_active_title(guild.id) is None:
+            set_active_title(guild.id, "random")
 
         data = load_data(guild.id)
         # on_readyでの一括ロール更新は403エラーの原因になるためスキップ
