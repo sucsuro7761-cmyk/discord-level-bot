@@ -333,6 +333,7 @@ class ShopCog(commands.Cog):
         info["coins"]               = info.get("coins", 0) + reward_coins
         info["coin_daily_earned"]   = today_earned + reward_coins
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + reward_coins
+        info["weekly_missions_cleared"] = info.get("weekly_missions_cleared", 0) + 1
         info["daily_mission_claimed"] = today
         save_data(guild_id, data)
 

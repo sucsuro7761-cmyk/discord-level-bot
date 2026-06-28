@@ -688,8 +688,10 @@ async def on_message(message):
         boss["damage"][user_id] = boss["damage"].get(user_id, 0) + actual_dmg
         boss["hp"] = max(0, boss["hp"] - actual_dmg)
 
-        # ミッション進捗：ボスダメージ
+        # ミッション進捗・週間ボスダメージ集計
         add_mission_progress(ensure_user_data(data, user_id), "boss_damage", actual_dmg)
+        u_info = ensure_user_data(data, user_id)
+        u_info["weekly_boss_damage"] = u_info.get("weekly_boss_damage", 0) + actual_dmg
 
         if boss["hp"] <= 0:
             boss["active"] = False
@@ -1373,6 +1375,76 @@ async def cleanup_spam_cache():
     for ck in to_delete:
         del spam_message_times[ck]
 
+# =========================
+# Legend 維持チェック
+# =========================
+LEGEND_MIN_LEVEL       = 101
+LEGEND_BASE_XP         = 10000   # 週間XP最低ライン
+LEGEND_RELAX_BOSS      = 3000    # 週ボスダメージがこれ以上なら -1000XP 緩和
+LEGEND_RELAX_MISSION   = 3       # デイリーミッション週3回以上なら -1000XP 緩和
+LEGEND_RELAX_AMOUNT    = 1000    # 各緩和条件で軽減される必要XP
+
+async def check_legend_maintenance(guild, data, notify_channel):
+    """Legend（Lv101以上）の週間維持チェック。条件未達成で -5 レベル降格。"""
+    demoted = []
+
+    for uid, info in data.items():
+        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+            continue
+        level = info.get("level", 1)
+        if level < LEGEND_MIN_LEVEL:
+            continue
+
+        weekly_xp = info.get("weekly_xp", 0)
+
+        # 緩和条件
+        relaxation = 0
+        if info.get("weekly_boss_damage", 0) >= LEGEND_RELAX_BOSS:
+            relaxation += LEGEND_RELAX_AMOUNT
+        if info.get("weekly_missions_cleared", 0) >= LEGEND_RELAX_MISSION:
+            relaxation += LEGEND_RELAX_AMOUNT
+
+        threshold = LEGEND_BASE_XP - relaxation
+
+        if weekly_xp >= threshold:
+            continue
+
+        # 維持失敗 → -5 レベル
+        new_level = max(1, level - 5)
+        info["level"] = new_level
+        info["xp"] = 0
+
+        member = guild.get_member(int(uid))
+        if member:
+            try:
+                await update_rank_role(member, new_level)
+            except Exception:
+                pass
+
+        demoted.append((uid, level, new_level, weekly_xp, threshold))
+
+    if demoted and notify_channel:
+        lines = "\n".join(
+            f"<@{uid}> Lv**{old}** → Lv**{new}**（週XP: {xp:,} / 必要: {thresh:,}）"
+            for uid, old, new, xp, thresh in demoted
+        )
+        embed = discord.Embed(
+            title="⚠️ Legend 維持条件未達成",
+            description=(
+                f"{lines}\n\n"
+                "**Legend 維持条件**\n"
+                "・週獲得XP **10,000以上**（メイン）\n"
+                "・週ボスダメージ3,000以上 → 必要XP -1,000\n"
+                "・デイリーミッション週3回以上達成 → 必要XP -1,000"
+            ),
+            color=discord.Color.red()
+        )
+        try:
+            await notify_channel.send(embed=embed)
+        except Exception:
+            pass
+
+
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
@@ -1493,6 +1565,9 @@ async def weekly_ranking_task():
                     f"`/settitle` で表示する称号を設定できます！"
                 )
 
+        # Legend 維持チェック（XPリセット前に実行）
+        await check_legend_maintenance(guild, data, notify_channel)
+
         for uid in data:
             if uid != LAST_DECAY_KEY:
                 data[uid]["weekly_xp"] = 0
@@ -1502,6 +1577,8 @@ async def weekly_ranking_task():
                 data[uid]["weekly_coins_spent"] = 0
                 data[uid]["weekly_coins_earned"] = 0
                 data[uid]["coin_daily_earned"] = 0
+                data[uid]["weekly_missions_cleared"] = 0
+                data[uid]["weekly_boss_damage"] = 0
         save_data(gid, data)
 
 # =========================
@@ -2602,8 +2679,7 @@ async def setuproles(interaction: discord.Interaction):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2642,7 +2718,7 @@ async def setuproles(interaction: discord.Interaction):
         role_order = [
             "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
-            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "Legend", "VIP", "VIP Lite", "Premiere",
             "CORE", "MEMBER", "MEMBER Lite",
             "⚔️ボス討伐者", "PHOTO+"
         ]
@@ -2719,8 +2795,7 @@ async def setupall(interaction: discord.Interaction):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2733,7 +2808,7 @@ async def setupall(interaction: discord.Interaction):
     role_order = [
         "むれちゃんbotお知らせ",
         "🥇週間王者", "🥈週間準王", "🥉週間三位",
-        "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+        "Legend", "VIP", "VIP Lite", "Premiere",
         "CORE", "MEMBER", "MEMBER Lite",
         "⚔️ボス討伐者", "PHOTO+"
     ]
@@ -2919,8 +2994,7 @@ async def on_guild_join(guild):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2958,7 +3032,7 @@ async def on_guild_join(guild):
         role_order = [
             "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
-            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "Legend", "VIP", "VIP Lite", "Premiere",
             "CORE", "MEMBER", "MEMBER Lite",
             "⚔️ボス討伐者", "PHOTO+"
         ]
@@ -3068,13 +3142,12 @@ async def on_guild_join(guild):
             description=(
                 "レベルに応じて自動でロールが変わります！\n\n"
                 "Lv1〜9：MEMBER Lite\n"
-                "Lv10〜29：MEMBER\n"
-                "Lv30〜49：CORE\n"
-                "Lv50〜74：SELECT\n"
-                "Lv75〜99：PREMIUM\n"
-                "Lv100〜199：VIP Lite\n"
-                "Lv200〜499：VIP\n"
-                "Lv500〜：💎 Legend\n\n"
+                "Lv10〜19：MEMBER\n"
+                "Lv20〜29：CORE\n"
+                "Lv30〜49：Premiere\n"
+                "Lv50〜74：VIP Lite\n"
+                "Lv75〜100：VIP\n"
+                "Lv101〜：💎 Legend（維持条件あり）\n\n"
                 "🌟 **Lv3達成で PHOTO+ ロールを永久取得！**\n"
                 "🥇 **週間TOP3には週間ロールを付与！**\n"
                 "⚔️ **ボス討伐ごとに LV〇〇ボス討伐者 ロールを付与！（月曜リセット）**\n"

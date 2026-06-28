@@ -184,13 +184,12 @@ def get_boss_clear_role_name(cleared: int) -> str:
 # =========================
 rank_roles = [
     (1,   9,    "MEMBER Lite"),
-    (10,  29,   "MEMBER"),
-    (30,  49,   "CORE"),
-    (50,  74,   "SELECT"),
-    (75,  99,   "PREMIUM"),
-    (100, 199,  "VIP Lite"),
-    (200, 499,  "VIP"),
-    (500, 9999, "Legend"),
+    (10,  19,   "MEMBER"),
+    (20,  29,   "CORE"),
+    (30,  49,   "Premiere"),
+    (50,  74,   "VIP Lite"),
+    (75,  100,  "VIP"),
+    (101, 9999, "Legend"),
 ]
 
 permanent_roles = {3: "PHOTO+"}
