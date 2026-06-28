@@ -18,115 +18,49 @@ import pytz
 logging.getLogger("discord").setLevel(logging.WARNING)
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 
+from utils.constants import (
+    DECAY_PERCENT, LAST_DECAY_KEY, DATA_DIR, JST,
+    BOT_ADMIN_IDS, is_bot_admin, COIN_DAILY_CAP, SHOP_ITEMS,
+    CRIT_TABLE_TEXT, CRIT_TABLE_VC, CRIT_TABLE, calc_crit,
+    BOSS_BASE_HP, BOSS_HP_SCALE,
+    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_CLEAR_ROLE,
+    EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
+    GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
+    rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
+    TITLE_DEFINITIONS, title_display,
+)
+from utils.config import (
+    load_config, save_config, load_shop_log, save_shop_log,
+    get_level_channel_id, set_level_channel_id,
+    get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
+    get_notification_role_id, set_notification_role_id, clear_notification_role_id,
+    get_earned_titles, add_earned_title, get_active_title, set_active_title,
+    resolve_display_title,
+)
+from utils.data import (
+    data_file, boss_file, event_boss_file, get_data_lock,
+    load_data, save_data, load_boss, save_boss,
+    load_global_event_boss, save_global_event_boss,
+    load_event_boss, save_event_boss,
+    ensure_user_data, now_ts, spend_coins, cleanup_expired_buffs, add_timed_buff,
+    get_today_mission, get_mission_progress, add_mission_progress,
+)
+from utils.boost import (
+    get_boost, set_time_boost, set_boss_boost,
+    guild_time_boost, guild_boss_boost,
+)
+from cogs.shop import draw_mystery_box, ROYAL_PASS_ROLE
+
 # =========================
 # Config
 # =========================
-DECAY_PERCENT = 0.05
-LAST_DECAY_KEY = "last_decay"
-DATA_DIR = "/data"
-JST = pytz.timezone("Asia/Tokyo")
 
 # bot管理者ID（環境変数 BOT_ADMIN_IDS にカンマ区切りで設定）
-_raw_admin_ids = os.environ.get("BOT_ADMIN_IDS", "1118472855865266246")
-BOT_ADMIN_IDS = set(int(i.strip()) for i in _raw_admin_ids.split(",") if i.strip().isdigit())
 
-def is_bot_admin(user_id: int) -> bool:
-    return user_id in BOT_ADMIN_IDS
 # =========================
 # Coin / Shop Config
 # =========================
-COIN_DAILY_CAP = 1500
 
-SHOP_ITEMS = {
-    "xp_small": {
-        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u5c0f\uff09",
-        "price": 1500,
-        "description": "XP\u7372\u5f97\u91cf\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
-        "buff_type": "xp_multiplier",
-        "value": 1.5,
-        "duration": 10 * 60,
-    },
-    "xp_medium": {
-        "name": "XP\u30d6\u30fc\u30b9\u30c8\uff08\u4e2d\uff09",
-        "price": 2000,
-        "description": "XP\u7372\u5f97\u91cf\u304c2\u500d\u306b\u306a\u308a\u307e\u3059\uff0810\u5206\uff09",
-        "buff_type": "xp_multiplier",
-        "value": 2.0,
-        "duration": 10 * 60,
-    },
-    "daily_boost": {
-        "name": "\u30c7\u30a4\u30ea\u30fc\u5f37\u5316",
-        "price": 1000,
-        "description": "\u30c7\u30a4\u30ea\u30fc\u5831\u916c\u304c1.5\u500d\u306b\u306a\u308a\u307e\u3059\uff0824\u6642\u9593\uff09",
-        "buff_type": "daily_multiplier",
-        "value": 1.5,
-        "duration": 24 * 60 * 60,
-    },
-    "attack_up": {
-        "name": "\u653b\u6483\u529b\u30a2\u30c3\u30d7",
-        "price": 1000,
-        "description": "\u30dc\u30b9\u3078\u306e\u30c0\u30e1\u30fc\u30b8\u304c1.2\u500d\u306b\u306a\u308a\u307e\u3059\uff0860\u5206\uff09",
-        "buff_type": "damage_multiplier",
-        "value": 1.2,
-        "duration": 60 * 60,
-    },
-    "crit_up": {
-        "name": "クリティカル強化",
-        "price": 5000,
-        "description": "クリティカル発生率がアップ！獲得XPに超高倍率ダメージ（15分）",
-        "buff_type": "crit_bonus",
-        "value": True,
-        "duration": 15 * 60,
-    },
-    "boss_slayer": {
-        "name": "ボス特効",
-        "price": 2000,
-        "description": "ボスへのダメージが1.3倍になります（15分）",
-        "buff_type": "boss_damage_multiplier",
-        "value": 1.3,
-        "duration": 15 * 60,
-    },
-    "decay_guard": {
-        "name": "🛡️ XP減衰ガード",
-        "price": 2500,
-        "description": "購入した日のXP自然減衰を無効化します（1日限定）",
-        "buff_type": "decay_guard",
-        "value": True,
-        "duration": 24 * 60 * 60,
-    },
-    "rankdown_shield": {
-        "name": "🔰 ランクダウン防止シールド",
-        "price": 5000,
-        "description": "次の1回のランクダウンを無効化します（使い切り）",
-        "buff_type": "rankdown_shield",
-        "value": True,
-        "duration": None,
-    },
-    "royal_pass": {
-        "name": "👑 ROYAL PASS",
-        "price": 50000,
-        "description": "XP+20%・デイリー報酬+50%・特別ロール付与（7日間）",
-        "buff_type": "royal_pass",
-        "value": True,
-        "duration": 7 * 24 * 60 * 60,
-    },
-    "mystery_box": {
-        "name": "🎁 ミステリーボックス",
-        "price": 3000,
-        "description": "開けると何かが飛び出す！ランダム報酬ボックス（専用コマンド /openbox で使用）",
-        "buff_type": None,
-        "value": None,
-        "duration": None,
-    },
-    "investment_pack": {
-        "name": "📈 投資パック",
-        "price": 3000,
-        "description": "500〜50,000コインを投資！24時間後に /claiminvest で回収（専用コマンド /invest で購入）",
-        "buff_type": None,
-        "value": None,
-        "duration": None,
-    },
-}
 
 # =========================
 # クリティカルシステム
@@ -143,36 +77,10 @@ SHOP_ITEMS = {
 # 超CT:   バフあり0.25%  / バフなし0.125% → ×25
 # 超+CT:  バフあり0.05%/ バフなし0.025% → ×50
 
-CRIT_TABLE_TEXT = [
-    # (名前, バフあり確率, バフなし確率, 倍率, 絵文字)
-    ("超+CT", 0.001,  0.0005,  50, "💥"),
-    ("超CT",  0.005,  0.0025,  25, "⚡"),
-    ("CT",    0.03,   0.015,   10, "🔥"),
-    ("ミニCT",0.05,   0.025,    5, "✨"),
-]
 
-CRIT_TABLE_VC = [
-    # テキストの半分の確率
-    ("超+CT", 0.0005,  0.00025,  50, "💥"),
-    ("超CT",  0.0025,  0.00125,  25, "⚡"),
-    ("CT",    0.015,   0.0075,   10, "🔥"),
-    ("ミニCT",0.025,   0.0125,    5, "✨"),
-]
 
 # 後方互換用（テキストをデフォルトとして残す）
-CRIT_TABLE = CRIT_TABLE_TEXT
 
-def calc_crit(base_xp, has_crit_buff, is_vc=False):
-    """クリティカル判定を行い (最終XP, クリット名orNone, 倍率) を返す"""
-    table = CRIT_TABLE_VC if is_vc else CRIT_TABLE_TEXT
-    r = random.random()
-    cumulative = 0.0
-    for name, prob_buff, prob_normal, multiplier, emoji in table:
-        prob = prob_buff if has_crit_buff else prob_normal
-        cumulative += prob
-        if r < cumulative:
-            return int(base_xp * multiplier), f"{emoji} {name}！", multiplier
-    return base_xp, None, 1
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -180,6 +88,13 @@ intents.members = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+async def _setup_hook():
+    await bot.load_extension("cogs.shop")
+    await bot.load_extension("cogs.titles")
+
+bot.setup_hook = _setup_hook
 
 vc_users = {}
 
@@ -191,6 +106,9 @@ spam_message_times = {}
 
 # 寝落ち管理: { "guild_id:user_id": True } → XP停止フラグ
 vc_afk_flags = {}
+# ギルドごとのデータ競合防止ロック
+
+
 # 最後にVCでXPを獲得した時刻（90分チェック用）: { "guild_id:user_id": timestamp }
 vc_last_xp_time = {}
 
@@ -198,24 +116,10 @@ vc_last_xp_time = {}
 # XP BOOST SYSTEM（サーバーごと・独立管理）
 # =========================
 # 時間帯ブースト: { guild_id: multiplier }  1=無効
-guild_time_boost = {}
 # ボス討伐ブースト: { guild_id: multiplier }  1=無効
-guild_boss_boost = {}
 
-def get_boost(guild_id):
-    """2つのブーストを掛け合わせた最終倍率を返す"""
-    time_m = guild_time_boost.get(guild_id, 1)
-    boss_m = guild_boss_boost.get(guild_id, 1)
-    total = time_m * boss_m
-    return {"multiplier": total, "active": total > 1}
 
-def set_time_boost(guild_id, multiplier):
-    """時間帯ブーストをセット（1=無効）"""
-    guild_time_boost[guild_id] = multiplier
 
-def set_boss_boost(guild_id, multiplier):
-    """ボス討伐ブーストをセット（1=無効）"""
-    guild_boss_boost[guild_id] = multiplier
 
 # =========================
 # 二重実行防止フラグ（サーバーごと）
@@ -227,8 +131,6 @@ _boss_spawn_announced = {} # { guild_id: date_str }
 # =========================
 # 週ボスシステム Config
 # =========================
-BOSS_BASE_HP = 30000
-BOSS_HP_SCALE = 1.2
 
 def find_member_globally(bot, user_id: int):
     """全サーバーからメンバーを検索して返す。見つからなければNone。"""
@@ -243,18 +145,10 @@ def get_member_name(bot, uid: str) -> str:
     member = find_member_globally(bot, int(uid))
     return member.display_name if member else f"ID:{uid}"
 
-def get_boss_clear_role_name(cleared: int) -> str:
-    """討伐回数からロール名を生成（LV〇〇ボス討伐者）"""
-    return f"⚔️ LV{cleared}ボス討伐者"
 
 # =========================
 # イベントボス Config
 # =========================
-EVENT_BOSS_DEFAULT_HP = 150000    # デフォルトHP（管理者が指定可能）
-EVENT_BOSS_CLEAR_ROLE = "👑BOSS VIP"
-EVENT_BOSS_CONSECUTIVE_CLEARS = 5  # 累計クリア数で発動
-EVENT_BOSS_BOOST_MULTIPLIER = 3    # 討伐後のXP倍率（デフォルト）
-EVENT_BOSS_BOOST_DAYS = 7          # ブースト日数（デフォルト）
 
 # イベントボス状態 { guild_id: bool }
 event_boss_active = {}
@@ -262,112 +156,26 @@ event_boss_active = {}
 # =========================
 # ファイルパス（サーバーごと）
 # =========================
-def data_file(guild_id):
-    return f"{DATA_DIR}/levels_{guild_id}.json"
 
-def boss_file(guild_id):
-    return f"{DATA_DIR}/boss_{guild_id}.json"
 
-def event_boss_file(guild_id):
-    return f"{DATA_DIR}/event_boss_{guild_id}.json"
 
-def config_file():
-    return f"{DATA_DIR}/config.json"
 
 # =========================
 # Config read/write（通知チャンネルID保存）
 # =========================
-def load_config():
-    path = config_file()
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
 
-def save_config(config):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(config_file(), "w") as f:
-        json.dump(config, f, indent=4)
 
-def load_shop_log(guild_id):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
 
-def save_shop_log(guild_id, log):
-    path = os.path.join(DATA_DIR, f"{guild_id}_shop_log.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(log, f, ensure_ascii=False, indent=2)
 
-def get_level_channel_id(guild_id):
-    config = load_config()
-    return config.get(str(guild_id), {}).get("level_channel_id")
 
-def set_level_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    config[gid]["level_channel_id"] = channel_id
-    save_config(config)
 
-def get_xp_channel_ids(guild_id):
-    """XPを獲得できるチャンネルIDリストを返す（空=全チャンネル許可）"""
-    config = load_config()
-    return config.get(str(guild_id), {}).get("xp_channels", [])
 
-def add_xp_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    channels = config[gid].setdefault("xp_channels", [])
-    if channel_id not in channels:
-        channels.append(channel_id)
-    save_config(config)
 
-def remove_xp_channel_id(guild_id, channel_id):
-    config = load_config()
-    gid = str(guild_id)
-    channels = config.get(gid, {}).get("xp_channels", [])
-    if channel_id in channels:
-        channels.remove(channel_id)
-        config[gid]["xp_channels"] = channels
-        save_config(config)
-        return True
-    return False
 
-def clear_xp_channels(guild_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid in config:
-        config[gid]["xp_channels"] = []
-        save_config(config)
 
-def get_notification_role_id(guild_id):
-    """通知メンション対象ロールIDを返す（未設定=None）"""
-    config = load_config()
-    return config.get(str(guild_id), {}).get("notification_role_id")
 
-def set_notification_role_id(guild_id, role_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid not in config:
-        config[gid] = {}
-    config[gid]["notification_role_id"] = role_id
-    save_config(config)
 
-def clear_notification_role_id(guild_id):
-    config = load_config()
-    gid = str(guild_id)
-    if gid in config and "notification_role_id" in config[gid]:
-        del config[gid]["notification_role_id"]
-        save_config(config)
+
 
 def get_notification_mention(guild):
     """通知ロールが設定されていればそのメンション文字列、未設定なら空文字を返す"""
@@ -421,96 +229,19 @@ async def setup_notification_panel_channel(guild):
 # =========================
 # Data read/write（サーバーごと）
 # =========================
-def load_data(guild_id):
-    path = data_file(guild_id)
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {}
 
-def save_data(guild_id, data):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(data_file(guild_id), "w") as f:
-        json.dump(data, f, indent=4)
 # =========================
 # Coin / Buff helpers
 # =========================
-def now_ts():
-    return int(time.time())
 
-def ensure_user_data(data, user_id):
-    if user_id not in data:
-        data[user_id] = {}
 
-    info = data[user_id]
-    info.setdefault("xp", 0)
-    info.setdefault("level", 1)
-    info.setdefault("last_daily", "")
-    info.setdefault("weekly_xp", 0)
-    info.setdefault("login_streak", 0)
-    info.setdefault("weekly_chat_xp", 0)
-    info.setdefault("weekly_vc_xp", 0)
-    info.setdefault("weekly_active_days", [])
-    info.setdefault("last_weekly_xp", 0)
-    info.setdefault("last_weekly_rank", 0)
-    info.setdefault("coins", 0)
-    info.setdefault("buffs", {})
-    info.setdefault("coin_daily_earned", 0)
-    info.setdefault("coin_total_spent", 0)
-    info.setdefault("decay_warning_days", 0)  # 維持条件を下回り続けた日数
-    return info
 
-def spend_coins(data, user_id, amount, reason="spend"):
-    info = ensure_user_data(data, user_id)
-    amount = int(amount)
-    if amount <= 0 or info.get("coins", 0) < amount:
-        return False
 
-    info["coins"] -= amount
-    info["coin_total_spent"] = info.get("coin_total_spent", 0) + amount
-    return True
-
-def cleanup_expired_buffs(info):
-    current = now_ts()
-    buffs = info.setdefault("buffs", {})
-    expired = [key for key, buff in buffs.items() if buff.get("expires_at", 0) <= current]
-    for key in expired:
-        del buffs[key]
-
-def add_timed_buff(info, buff_type, value, duration_seconds, item_id):
-    cleanup_expired_buffs(info)
-    current = now_ts()
-    buffs = info.setdefault("buffs", {})
-    old = buffs.get(buff_type)
-    expires_at = current + int(duration_seconds)
-    if old and old.get("expires_at", 0) > current:
-        expires_at = max(old["expires_at"], current) + int(duration_seconds)
-    buffs[buff_type] = {
-        "value": value,
-        "expires_at": expires_at,
-        "item_id": item_id,
-    }
 
 # =========================
 # Boss read/write（サーバーごと）
 # =========================
-def load_boss(guild_id):
-    path = boss_file(guild_id)
-    if not os.path.exists(path):
-        return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "week": 0, "cleared": 0}
 
-def save_boss(guild_id, boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(boss_file(guild_id), "w") as f:
-        json.dump(boss, f, indent=4)
 
 # =========================
 # Flask keep alive
@@ -531,26 +262,8 @@ def keep_alive():
 # =========================
 # Rank definitions
 # =========================
-rank_roles = [
-    (1, 9, "MEMBER Lite"),
-    (10, 29, "MEMBER"),
-    (30, 49, "CORE"),
-    (50, 74, "SELECT"),
-    (75, 99, "PREMIUM"),
-    (100, 199, "VIP Lite"),
-    (200, 499, "VIP"),
-    (500, 9999, "Legend")
-]
 
-permanent_roles = {
-    3: "PHOTO+"
-}
 
-weekly_roles = {
-    1: "🥇週間王者",
-    2: "🥈週間準王",
-    3: "🥉週間三位"
-}
 
 # =========================
 # Rank Role Updater
@@ -841,129 +554,130 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
-    data = load_data(guild_id)
-    ensure_user_data(data, user_id)
-    data.setdefault(LAST_DECAY_KEY, "")
+    async with get_data_lock(guild_id):
+        data = load_data(guild_id)
+        ensure_user_data(data, user_id)
+        data.setdefault(LAST_DECAY_KEY, "")
 
-    # アクティブ日数を記録
-    today_jst = datetime.now(JST).strftime("%Y-%m-%d")
-    if today_jst not in data[user_id]["weekly_active_days"]:
-        data[user_id]["weekly_active_days"].append(today_jst)
+        # アクティブ日数を記録
+        today_jst = datetime.now(JST).strftime("%Y-%m-%d")
+        if today_jst not in data[user_id]["weekly_active_days"]:
+            data[user_id]["weekly_active_days"].append(today_jst)
 
-    # 最終アクティブ日を記録（減衰判定用）
-    data[user_id]["last_active_date"] = today_jst
+        # 最終アクティブ日を記録（減衰判定用）
+        data[user_id]["last_active_date"] = today_jst
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if data[user_id]["last_daily"] != today:
-        if data[user_id]["last_daily"] == yesterday:
-            data[user_id]["login_streak"] += 1
-        else:
-            data[user_id]["login_streak"] = 1
-
-        streak = data[user_id]["login_streak"]
-
-        if streak == 1:
-            bonus = 100
-        elif streak == 2:
-            bonus = 200
-        elif streak == 3:
-            bonus = 300
-        elif streak == 4:
-            bonus = 500
-        else:
-            bonus = 1000
-
-        data[user_id]["xp"] += bonus
-        data[user_id]["weekly_xp"] += bonus
-        data[user_id]["last_daily"] = today
-
-        # ログインボーナスでボスにダメージ
-        boss = load_boss(guild_id)
-        if boss.get("active"):
-            boss["damage"][user_id] = boss["damage"].get(user_id, 0) + bonus
-            boss["hp"] = max(0, boss["hp"] - bonus)
-            if boss["hp"] <= 0:
-                boss["active"] = False
-                boss["cleared"] += 1
-                save_boss(guild_id, boss)
-                await handle_boss_clear(message.guild, boss)
+        if data[user_id]["last_daily"] != today:
+            if data[user_id]["last_daily"] == yesterday:
+                data[user_id]["login_streak"] += 1
             else:
-                save_boss(guild_id, boss)
+                data[user_id]["login_streak"] = 1
 
-        # ストリークボーナスコイン（100 + streak * 20、上限500）
-        streak_coins = min(100 + (streak * 20), 500)
-        info = ensure_user_data(data, user_id)
+            streak = data[user_id]["login_streak"]
 
-        # ログインボーナス2倍チケット適用
-        if info.get("login_bonus_2x"):
-            streak_coins *= 2
-            info["login_bonus_2x"] = False
+            if streak == 1:
+                bonus = 100
+            elif streak == 2:
+                bonus = 200
+            elif streak == 3:
+                bonus = 300
+            elif streak == 4:
+                bonus = 500
+            else:
+                bonus = 1000
 
-        today_earned = info.get("coin_daily_earned", 0)
-        if today_earned < COIN_DAILY_CAP:
-            add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
-            info["coins"] = info.get("coins", 0) + add_amount
-            info["coin_daily_earned"] = today_earned + add_amount
-            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + add_amount
-        else:
-            streak_coins = 0
+            data[user_id]["xp"] += bonus
+            data[user_id]["weekly_xp"] += bonus
+            data[user_id]["last_daily"] = today
 
-        if streak == 1:
-            streak_msg = "🎁 **デイリーボーナス！**"
-        elif streak < 5:
-            streak_msg = f"🔥 **{streak}日連続ログイン！**"
-        else:
-            streak_msg = f"🌟 **{streak}日連続ログイン！MAX ボーナス！**"
+            # ログインボーナスでボスにダメージ
+            boss = load_boss(guild_id)
+            if boss.get("active"):
+                boss["damage"][user_id] = boss["damage"].get(user_id, 0) + bonus
+                boss["hp"] = max(0, boss["hp"] - bonus)
+                if boss["hp"] <= 0:
+                    boss["active"] = False
+                    boss["cleared"] += 1
+                    save_boss(guild_id, boss)
+                    await handle_boss_clear(message.guild, boss)
+                else:
+                    save_boss(guild_id, boss)
 
-        coin_msg = f" 💰 +{streak_coins}コイン" if streak_coins > 0 else ""
-        await message.channel.send(
-            f"{streak_msg}\n"
-            f"{message.author.mention} **+{bonus}XP**{coin_msg} "
-            f"（連続{streak}日目）"
-        )
+            # ストリークボーナスコイン（100 + streak * 20、上限500）
+            streak_coins = min(100 + (streak * 20), 500)
+            info = ensure_user_data(data, user_id)
 
-        # 7の倍数連続ログインでミステリーボックスプレゼント
-        if streak % 7 == 0:
-            await give_streak_mystery_box(message.author, message.guild, message.channel, streak)
+            # ログインボーナス2倍チケット適用
+            if info.get("login_bonus_2x"):
+                streak_coins *= 2
+                info["login_bonus_2x"] = False
 
-    boost = get_boost(guild_id)
+            today_earned = info.get("coin_daily_earned", 0)
+            if today_earned < COIN_DAILY_CAP:
+                add_amount = min(streak_coins, COIN_DAILY_CAP - today_earned)
+                info["coins"] = info.get("coins", 0) + add_amount
+                info["coin_daily_earned"] = today_earned + add_amount
+                info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + add_amount
+            else:
+                streak_coins = 0
 
-    # ショップバフ適用（xp_multiplier・crit_bonus）
-    info_tmp = data[user_id]
-    cleanup_expired_buffs(info_tmp)
-    xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
-    shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
-    has_crit_buff = bool(info_tmp.get("buffs", {}).get("crit_bonus"))
+            if streak == 1:
+                streak_msg = "🎁 **デイリーボーナス！**"
+            elif streak < 5:
+                streak_msg = f"🔥 **{streak}日連続ログイン！**"
+            else:
+                streak_msg = f"🌟 **{streak}日連続ログイン！MAX ボーナス！**"
 
-    base_xp = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
-    xp_gain, crit_name, crit_multi = calc_crit(base_xp, has_crit_buff)
-    data[user_id]["xp"] += xp_gain
-    data[user_id]["weekly_xp"] += xp_gain
-    data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
-
-    # ミッション進捗：メッセージ数・XP獲得
-    info = ensure_user_data(data, user_id)
-    add_mission_progress(info, "msg_count", 1)
-    add_mission_progress(info, "xp_gained", xp_gain)
-
-    # クリティカル発生時に通知
-    if crit_name:
-        try:
+            coin_msg = f" 💰 +{streak_coins}コイン" if streak_coins > 0 else ""
             await message.channel.send(
-                f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+                f"{streak_msg}\n"
+                f"{message.author.mention} **+{bonus}XP**{coin_msg} "
+                f"（連続{streak}日目）"
             )
-        except discord.DiscordServerError:
-            pass
 
-    await check_level_up(message.author, data, user_id)
+            # 7の倍数連続ログインでミステリーボックスプレゼント
+            if streak % 7 == 0:
+                await give_streak_mystery_box(message.author, message.guild, message.channel, streak)
 
-    # 時間帯別アクティブ記録（/peakhours用）
-    hour_key = f"hour_{datetime.now(JST).hour}"
-    data[user_id][hour_key] = data[user_id].get(hour_key, 0) + 1
+        boost = get_boost(guild_id)
 
-    save_data(guild_id, data)
+        # ショップバフ適用（xp_multiplier・crit_bonus）
+        info_tmp = data[user_id]
+        cleanup_expired_buffs(info_tmp)
+        xp_buff = info_tmp.get("buffs", {}).get("xp_multiplier", {})
+        shop_xp_multi = xp_buff.get("value", 1.0) if xp_buff else 1.0
+        has_crit_buff = bool(info_tmp.get("buffs", {}).get("crit_bonus"))
+
+        base_xp = int(random.randint(5, 20) * boost["multiplier"] * shop_xp_multi)
+        xp_gain, crit_name, crit_multi = calc_crit(base_xp, has_crit_buff)
+        data[user_id]["xp"] += xp_gain
+        data[user_id]["weekly_xp"] += xp_gain
+        data[user_id]["weekly_chat_xp"] = data[user_id].get("weekly_chat_xp", 0) + xp_gain
+
+        # ミッション進捗：メッセージ数・XP獲得
+        info = ensure_user_data(data, user_id)
+        add_mission_progress(info, "msg_count", 1)
+        add_mission_progress(info, "xp_gained", xp_gain)
+
+        # クリティカル発生時に通知
+        if crit_name:
+            try:
+                await message.channel.send(
+                    f"{crit_name} {message.author.display_name} **+{xp_gain:,}XP**（{crit_multi}倍！）"
+                )
+            except discord.DiscordServerError:
+                pass
+
+        await check_level_up(message.author, data, user_id)
+
+        # 時間帯別アクティブ記録（/peakhours用）
+        hour_key = f"hour_{datetime.now(JST).hour}"
+        data[user_id][hour_key] = data[user_id].get(hour_key, 0) + 1
+
+        save_data(guild_id, data)
 
     boss = load_boss(guild_id)
     if boss.get("active"):
@@ -1229,47 +943,48 @@ async def on_voice_state_update(member, before, after):
                 if afk_confirmed:
                     continue  # フラグON → XP停止
 
-            data = load_data(guild_id)
-            ensure_user_data(data, user_id)
+            async with get_data_lock(guild_id):
+                data = load_data(guild_id)
+                ensure_user_data(data, user_id)
 
-            if not member.voice or not member.voice.channel:
-                break
+                if not member.voice or not member.voice.channel:
+                    break
 
-            boost = get_boost(guild_id)
-            # ミュート中は2XP、ミュート解除（発言中）は15XP
-            is_muted = member.voice.self_mute or member.voice.mute if member.voice else True
-            base_xp_vc = 2 if is_muted else 15
+                boost = get_boost(guild_id)
+                # ミュート中は2XP、ミュート解除（発言中）は15XP
+                is_muted = member.voice.self_mute or member.voice.mute if member.voice else True
+                base_xp_vc = 2 if is_muted else 15
 
-            # VCクリティカル判定（テキストの半分の確率）
-            vc_info = data.get(user_id, {})
-            cleanup_expired_buffs(vc_info)
-            has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
-            base_xp_boosted = int(base_xp_vc * boost["multiplier"])
-            gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc, is_vc=True)
+                # VCクリティカル判定（テキストの半分の確率）
+                vc_info = data.get(user_id, {})
+                cleanup_expired_buffs(vc_info)
+                has_crit_buff_vc = bool(vc_info.get("buffs", {}).get("crit_bonus"))
+                base_xp_boosted = int(base_xp_vc * boost["multiplier"])
+                gain, crit_name_vc, crit_multi_vc = calc_crit(base_xp_boosted, has_crit_buff_vc, is_vc=True)
 
-            data[user_id]["xp"] += gain
-            data[user_id]["weekly_xp"] += gain
-            data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+                data[user_id]["xp"] += gain
+                data[user_id]["weekly_xp"] += gain
+                data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
 
-            # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
-            vc_info_m = ensure_user_data(data, user_id)
-            add_mission_progress(vc_info_m, "vc_minutes", 0.5)
-            add_mission_progress(vc_info_m, "xp_gained", gain)
+                # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
+                vc_info_m = ensure_user_data(data, user_id)
+                add_mission_progress(vc_info_m, "vc_minutes", 0.5)
+                add_mission_progress(vc_info_m, "xp_gained", gain)
 
-            # VCクリティカル発生時に通知
-            if crit_name_vc:
-                ch_id = get_level_channel_id(guild_id)
-                crit_ch = member.guild.get_channel(ch_id) if ch_id else None
-                if crit_ch:
-                    try:
-                        await crit_ch.send(
-                            f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
-                        )
-                    except discord.DiscordServerError:
-                        pass
+                # VCクリティカル発生時に通知
+                if crit_name_vc:
+                    ch_id = get_level_channel_id(guild_id)
+                    crit_ch = member.guild.get_channel(ch_id) if ch_id else None
+                    if crit_ch:
+                        try:
+                            await crit_ch.send(
+                                f"{crit_name_vc} {member.display_name} **+{gain:,}XP**（VC {crit_multi_vc}倍！）"
+                            )
+                        except discord.DiscordServerError:
+                            pass
 
-            await check_level_up(member, data, user_id)
-            save_data(guild_id, data)
+                await check_level_up(member, data, user_id)
+                save_data(guild_id, data)
 
             boss = load_boss(guild_id)
             if boss.get("active"):
@@ -1313,159 +1028,6 @@ async def on_voice_state_update(member, before, after):
         vc_last_xp_time.pop(ck, None)
 
 
-# =========================
-# /coins /buffs /shop /buy
-# =========================
-@bot.tree.command(name="coins", description="\u6240\u6301\u30b3\u30a4\u30f3\u3092\u78ba\u8a8d\u3057\u307e\u3059")
-async def coins(interaction: discord.Interaction):
-    data = load_data(interaction.guild.id)
-    user_id = str(interaction.user.id)
-    info = ensure_user_data(data, user_id)
-    save_data(interaction.guild.id, data)
-
-    embed = discord.Embed(title="\U0001f4b0 \u6240\u6301\u30b3\u30a4\u30f3", color=discord.Color.gold())
-    embed.add_field(name="\u73fe\u5728\u306e\u6240\u6301\u30b3\u30a4\u30f3", value=f"{info.get('coins', 0):,}\u30b3\u30a4\u30f3", inline=False)
-    embed.add_field(name="\u4eca\u65e5\u306e\u7372\u5f97\u91cf", value=f"{info.get('coin_daily_earned', 0):,} / {COIN_DAILY_CAP:,}\u30b3\u30a4\u30f3", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="buffs", description="\u6709\u52b9\u306a\u30a2\u30a4\u30c6\u30e0\u52b9\u679c\u3092\u78ba\u8a8d\u3057\u307e\u3059")
-async def buffs(interaction: discord.Interaction):
-    data = load_data(interaction.guild.id)
-    user_id = str(interaction.user.id)
-    info = ensure_user_data(data, user_id)
-    cleanup_expired_buffs(info)
-    save_data(interaction.guild.id, data)
-
-    if not info.get("buffs"):
-        await interaction.response.send_message("\u73fe\u5728\u6709\u52b9\u306a\u30d0\u30d5\u306f\u3042\u308a\u307e\u305b\u3093\u3002", ephemeral=True)
-        return
-
-    lines = []
-    current = now_ts()
-    for buff_type, buff in info["buffs"].items():
-        remain = max(0, buff.get("expires_at", 0) - current)
-        minutes = math.ceil(remain / 60)
-        item = SHOP_ITEMS.get(buff.get("item_id"), {})
-        lines.append(f"**{item.get('name', buff_type)}**\uff1a\u6b8b\u308a\u7d04{minutes}\u5206")
-
-    embed = discord.Embed(title="\u2728 \u6709\u52b9\u306a\u30d0\u30d5", description="\n".join(lines), color=discord.Color.blue())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="shop", description="\u30b7\u30e7\u30c3\u30d7\u306e\u5546\u54c1\u4e00\u89a7\u3092\u8868\u793a\u3057\u307e\u3059")
-async def shop(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="\U0001f6d2 \u30b7\u30e7\u30c3\u30d7",
-        description="\u8cfc\u5165\u3059\u308b\u306b\u306f `/buy item_id` \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002\u5546\u54c1ID\u306f\u82f1\u5b57\u306e\u307e\u307e\u5165\u529b\u3057\u307e\u3059\u3002",
-        color=discord.Color.green()
-    )
-
-    for item_id, item in SHOP_ITEMS.items():
-        embed.add_field(
-            name=f"{item['name']}\uff5c{item['price']:,}\u30b3\u30a4\u30f3",
-            value=f"\u5546\u54c1ID: `{item_id}`\n{item['description']}",
-            inline=False,
-        )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="buy", description="\u30b7\u30e7\u30c3\u30d7\u306e\u5546\u54c1\u3092\u8cfc\u5165\u3057\u307e\u3059")
-async def buy(interaction: discord.Interaction, item_id: str):
-    item_id = item_id.lower().strip()
-
-    if item_id not in SHOP_ITEMS:
-        await interaction.response.send_message(
-            "\u305d\u306e\u5546\u54c1ID\u306f\u5b58\u5728\u3057\u307e\u305b\u3093\u3002`/shop` \u3067\u5546\u54c1\u4e00\u89a7\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-            ephemeral=True
-        )
-        return
-
-    data = load_data(interaction.guild.id)
-    user_id = str(interaction.user.id)
-    info = ensure_user_data(data, user_id)
-    item = SHOP_ITEMS[item_id]
-
-    # 特殊アイテムは専用コマンドへリダイレクト
-    if item_id == "mystery_box":
-        await interaction.response.send_message(
-            "🎁 ミステリーボックスは `/openbox` コマンドで購入・使用できます！",
-            ephemeral=True
-        )
-        return
-    if item_id == "investment_pack":
-        await interaction.response.send_message(
-            "📈 投資パックは `/invest` コマンドで購入・使用できます！",
-            ephemeral=True
-        )
-        return
-    if item_id == "royal_pass":
-        await interaction.response.send_message(
-            "👑 ROYAL PASSは `/buyroyal` コマンドで購入できます！",
-            ephemeral=True
-        )
-        return
-
-    if not spend_coins(data, user_id, item["price"], f"buy_{item_id}"):
-        await interaction.response.send_message(
-            f"\u30b3\u30a4\u30f3\u304c\u8db3\u308a\u307e\u305b\u3093\u3002\n"
-            f"\u5fc5\u8981: **{item['price']:,}\u30b3\u30a4\u30f3**\n"
-            f"\u6240\u6301: **{info.get('coins', 0):,}\u30b3\u30a4\u30f3**",
-            ephemeral=True
-        )
-        return
-
-    # ランクダウン防止シールドは使い切り型（duration不要）
-    if item_id == "rankdown_shield":
-        info.setdefault("buffs", {})
-        info["buffs"]["rankdown_shield"] = {"active": True}
-    else:
-        add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
-
-    # 週間コイン消費ランキング用に記録
-    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + item["price"]
-
-    # 人気アイテムランキング用に記録（サーバー共通ファイル）
-    shop_log = load_shop_log(interaction.guild.id)
-    week_key = datetime.now(JST).strftime("%Y-W%W")
-    shop_log.setdefault(week_key, {})
-    shop_log[week_key][item_id] = shop_log[week_key].get(item_id, 0) + 1
-    save_shop_log(interaction.guild.id, shop_log)
-
-    save_data(interaction.guild.id, data)
-
-    duration_min = item["duration"] // 60
-    await interaction.response.send_message(
-        f"✅ **{item['name']}** を購入しました！\n"
-        f"効果: {item['description']}",
-        ephemeral=True
-    )
-
-    # バフ開始通知
-    ch_id = get_level_channel_id(interaction.guild.id)
-    notify_ch = interaction.guild.get_channel(ch_id) if ch_id else None
-    if notify_ch:
-        await notify_ch.send(
-            f"✨ **{interaction.user.display_name}** が **{item['name']}** を使用しました！"
-            f"（有効時間　{duration_min}分）"
-        )
-
-    # バフ終了通知タスク
-    asyncio.create_task(notify_buff_end(
-        interaction.guild, interaction.user.display_name,
-        item["name"], item["duration"]
-    ))
-
-# =========================
-# バフ終了通知
-# =========================
-async def notify_buff_end(guild, user_name, item_name, duration_seconds):
-    await asyncio.sleep(duration_seconds)
-    ch_id = get_level_channel_id(guild.id)
-    notify_ch = guild.get_channel(ch_id) if ch_id else None
-    if notify_ch:
-        await notify_ch.send(f"⏱ **{user_name}** の **{item_name}** の効果が終了しました。")
-
-
-# =========================
 # /return（AFK解除）
 # =========================
 @bot.tree.command(name="return", description="寝落ちチェックで停止したVC XPを再開します")
@@ -1800,6 +1362,17 @@ async def alldata_error(interaction: discord.Interaction, error):
 # =========================
 # 週間ランキング（全サーバー）
 # =========================
+@tasks.loop(minutes=10)
+async def cleanup_spam_cache():
+    """古いスパムキャッシュエントリを削除してメモリリークを防ぐ"""
+    current_time = time.time()
+    to_delete = [
+        ck for ck, times in list(spam_message_times.items())
+        if not times or current_time - max(times) > 60
+    ]
+    for ck in to_delete:
+        del spam_message_times[ck]
+
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
@@ -1807,6 +1380,26 @@ async def weekly_ranking_task():
 
     if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
         return
+
+    # 週間王者称号チェック（全サーバー比較）
+    server_xp_list = [
+        (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
+    ]
+    if server_xp_list:
+        champion_guild = max(server_xp_list, key=lambda x: x[1])
+        if champion_guild[1] > 0:
+            ch_guild, _ = champion_guild
+            is_new = add_earned_title(ch_guild.id, "weekly_champion")
+            ch_id = get_level_channel_id(ch_guild.id)
+            notify_ch = ch_guild.get_channel(ch_id) if ch_id else None
+            if notify_ch:
+                defn = TITLE_DEFINITIONS["weekly_champion"]
+                msg = (
+                    f"🏆 **週間王者サーバー称号獲得！**\n{defn['name']} — {defn['description']}"
+                    if is_new else
+                    f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
+                )
+                await notify_ch.send(msg)
 
     for guild in bot.guilds:
         gid = guild.id
@@ -1882,6 +1475,23 @@ async def weekly_ranking_task():
                 color=discord.Color.green()
             )
             await notify_channel.send(embed=embed_act)
+
+        # 週間コイン獲得合計チェック → rich_community 称号
+        rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
+        total_weekly_coins = sum(
+            info.get("weekly_coins_earned", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        if total_weekly_coins >= rich_threshold:
+            is_new = add_earned_title(gid, "rich_community")
+            if is_new and notify_channel:
+                defn = TITLE_DEFINITIONS["rich_community"]
+                await notify_channel.send(
+                    f"💰 **新しい称号を獲得しました！**\n"
+                    f"**{defn['name']}** — {defn['description']}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
 
         for uid in data:
             if uid != LAST_DECAY_KEY:
@@ -2192,36 +1802,10 @@ async def weekly_mid_announcement():
 # =========================
 # イベントボス read/write
 # =========================
-GLOBAL_EVENT_BOSS_FILE = os.path.join(DATA_DIR, "global_event_boss.json")
 
-def load_global_event_boss():
-    if os.path.exists(GLOBAL_EVENT_BOSS_FILE):
-        with open(GLOBAL_EVENT_BOSS_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                pass
-    return {"active": False, "hp": 0, "max_hp": 0, "name": "", "damage": {}, "boost_days": 7, "boost_multiplier": 3}
 
-def save_global_event_boss(boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(GLOBAL_EVENT_BOSS_FILE, "w", encoding="utf-8") as f:
-        json.dump(boss, f, ensure_ascii=False, indent=2)
 
-def load_event_boss(guild_id):
-    path = event_boss_file(guild_id)
-    if not os.path.exists(path):
-        return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
-    with open(path, "r") as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return {"active": False, "hp": 0, "max_hp": 0, "damage": {}, "name": "大魔王", "consecutive_clears": 0}
 
-def save_event_boss(guild_id, boss):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(event_boss_file(guild_id), "w") as f:
-        json.dump(boss, f, indent=4)
 
 # =========================
 # イベントボス：自動発動チェック（通常ボスクリア時に呼ぶ）
@@ -2526,6 +2110,20 @@ async def handle_boss_clear(guild, boss):
     # イベントボストリガーチェック
     await check_event_boss_trigger(guild, boss.get("cleared", 0))
 
+    # 称号チェック（ボス討伐系）
+    cleared_total = boss.get("cleared", 0)
+    for title_id, defn in TITLE_DEFINITIONS.items():
+        if defn.get("trigger") != "boss_defeat":
+            continue
+        if cleared_total >= defn.get("threshold", 1):
+            is_new = add_earned_title(gid, title_id)
+            if is_new and notify_channel:
+                await notify_channel.send(
+                    f"🏅 **新しい称号を獲得しました！**\n"
+                    f"**{defn['name']}** — {defn['description']}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
+
 # =========================
 # 週ボス：討伐ブースト
 # =========================
@@ -2759,174 +2357,6 @@ async def boss_damage_report():
                 pass
 
 
-# =========================
-# /chest（ランダム宝箱）
-# =========================
-chest_cooldowns = {}  # { "guild_id:user_id": timestamp }
-
-@bot.tree.command(name="chest", description="ランダム宝箱を開ける（1時間に1回）")
-async def chest(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id = str(interaction.user.id)
-    ck = f"{guild_id}:{user_id}"
-    now = time.time()
-
-    # 1時間クールダウン
-    if ck in chest_cooldowns and now - chest_cooldowns[ck] < 3600:
-        remaining = int(3600 - (now - chest_cooldowns[ck]))
-        mins = remaining // 60
-        secs = remaining % 60
-        await interaction.response.send_message(
-            f"⏳ 宝箱のクールダウン中です。あと **{mins}分{secs}秒** お待ちください！",
-            ephemeral=True
-        )
-        return
-
-    chest_cooldowns[ck] = now
-    data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
-
-    # 当日獲得上限チェック
-    today_earned = info.get("coin_daily_earned", 0)
-    if today_earned >= COIN_DAILY_CAP:
-        await interaction.response.send_message(
-            f"💸 今日のコイン獲得上限（{COIN_DAILY_CAP:,}コイン）に達しています。明日またどうぞ！",
-            ephemeral=True
-        )
-        return
-
-    coin_gain = random.randint(10, 100)
-    coin_gain = min(coin_gain, COIN_DAILY_CAP - today_earned)
-    info["coins"] = info.get("coins", 0) + coin_gain
-    info["coin_daily_earned"] = today_earned + coin_gain
-    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_gain
-
-    # ミッション進捗：チェスト回数
-    add_mission_progress(info, "chest_count", 1)
-
-    save_data(guild_id, data)
-
-    embed = discord.Embed(
-        title="📦 宝箱を開けた！",
-        description=f"{interaction.user.mention} が宝箱を開けました！\n💰 **+{coin_gain:,}コイン** 獲得！",
-        color=discord.Color.gold()
-    )
-    embed.set_footer(text="次の宝箱は1時間後に開けられます")
-    await interaction.response.send_message(embed=embed)
-
-# =========================
-# 曜日別デイリーミッション定義
-# =========================
-# weekday(): 0=月 1=火 2=水 3=木 4=金 5=土 6=日
-DAILY_MISSIONS = {
-    0: {"label": "💬 メッセージを5回送る",       "type": "msg_count",    "goal": 5,   "reward": 100},
-    1: {"label": "💬 メッセージを10回送る",      "type": "msg_count",    "goal": 10,  "reward": 200},
-    2: {"label": "🎙️ VCに30分滞在する",         "type": "vc_minutes",   "goal": 30,  "reward": 200},
-    3: {"label": "⚔️ ボスに300ダメージ与える",   "type": "boss_damage",  "goal": 300, "reward": 500},
-    4: {"label": "🎁 チェストを3回開ける",       "type": "chest_count",  "goal": 3,   "reward": 300},
-    5: {"label": "📈 投資パックを購入する",      "type": "invest_done",  "goal": 1,   "reward": 500},
-    6: {"label": "⭐ XPを500獲得する",           "type": "xp_gained",    "goal": 500, "reward": 300},
-}
-
-def get_today_mission():
-    """今日の曜日のミッションを返す"""
-    weekday = datetime.now(JST).weekday()
-    return DAILY_MISSIONS[weekday]
-
-def get_mission_progress(info, mission_type):
-    """ミッション進捗を返す"""
-    today = datetime.now(JST).strftime("%Y-%m-%d")
-    progress = info.get("daily_mission_progress", {})
-    if progress.get("date") != today:
-        return 0
-    return progress.get(mission_type, 0)
-
-def add_mission_progress(info, mission_type, amount=1):
-    """ミッション進捗を加算する"""
-    today = datetime.now(JST).strftime("%Y-%m-%d")
-    progress = info.get("daily_mission_progress", {})
-    if progress.get("date") != today:
-        progress = {"date": today}
-    progress[mission_type] = progress.get(mission_type, 0) + amount
-    info["daily_mission_progress"] = progress
-
-# =========================
-# /dailymission（曜日別デイリーミッション確認・受取）
-# =========================
-@bot.tree.command(name="dailymission", description="今日のデイリーミッションを確認・受け取る")
-async def dailymission(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    data     = load_data(guild_id)
-    info     = ensure_user_data(data, user_id)
-
-    today    = datetime.now(JST).strftime("%Y-%m-%d")
-    mission  = get_today_mission()
-    m_type   = mission["type"]
-    m_goal   = mission["goal"]
-    m_reward = mission["reward"]
-    m_label  = mission["label"]
-
-    if info.get("daily_mission_claimed") == today:
-        await interaction.response.send_message(
-            "✅ 今日のデイリーミッションは既に受け取り済みです！明日また来てね。",
-            ephemeral=True
-        )
-        return
-
-    progress = get_mission_progress(info, m_type)
-    achieved = progress >= m_goal
-
-    # 木曜ミッション：ボスが不在（討伐済み）なら自動達成
-    if m_type == "boss_damage" and not achieved:
-        boss = load_boss(guild_id)
-        if not boss.get("active"):
-            achieved = True
-            m_label = "⚔️ ボスに300ダメージ与える（今週のボスは討伐済み！）"
-
-    if not achieved:
-        bar_filled = int((min(progress, m_goal) / m_goal) * 10)
-        bar = "█" * bar_filled + "░" * (10 - bar_filled)
-        embed = discord.Embed(
-            title="🎯 今日のデイリーミッション",
-            description=(
-                f"**{m_label}**\n\n"
-                f"進捗：`{bar}` {progress:.1f} / {m_goal}\n"
-                f"💰 達成報酬：**{m_reward}コイン**\n\n"
-                f"⏳ まだ未達成です。頑張ろう！"
-            ),
-            color=discord.Color.blue()
-        )
-        await interaction.response.send_message(embed=embed)
-        return
-
-    today_earned = info.get("coin_daily_earned", 0)
-    if today_earned >= COIN_DAILY_CAP:
-        await interaction.response.send_message(
-            f"💸 今日のコイン獲得上限（{COIN_DAILY_CAP:,}コイン）に達しています。",
-            ephemeral=True
-        )
-        return
-
-    reward_coins = min(m_reward, COIN_DAILY_CAP - today_earned)
-    info["coins"] = info.get("coins", 0) + reward_coins
-    info["coin_daily_earned"] = today_earned + reward_coins
-    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + reward_coins
-    info["daily_mission_claimed"] = today
-    save_data(guild_id, data)
-
-    embed = discord.Embed(
-        title="🎯 デイリーミッション達成！",
-        description=(
-            f"**{m_label}**\n\n"
-            f"✅ ミッション達成！\n"
-            f"💰 **+{reward_coins:,}コイン** 獲得！"
-        ),
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
-
-# =========================
 # 招待報酬（新規参加時に招待者へ500コイン）
 # =========================
 @bot.event
@@ -3513,6 +2943,9 @@ async def on_guild_join(guild):
 
     await setup_notification_panel_channel(guild)
 
+    # 導入記念称号を付与
+    add_earned_title(guild.id, "newcomer")
+
     # ===== bot説明チャンネルを作成 =====
     desc_channel = None
     existing_desc = discord.utils.get(guild.text_channels, name="bot説明")
@@ -3820,7 +3253,8 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
             diff      = prev_xp - total_xp
             diff_text = f"次の順位まで **{diff:,} XP**！"
 
-        desc += f"{medal} **{guild.name}**\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
+        t_disp = title_display(resolve_display_title(guild.id))
+        desc += f"{medal} **{guild.name}**{t_disp}\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:
         desc = "データがありません。"
@@ -3957,504 +3391,6 @@ async def startbattle(interaction: discord.Interaction):
     )
 
 
-# =========================
-# ミステリーボックス抽選関数
-# =========================
-def draw_mystery_box():
-    r = random.random()
-
-    if r < 0.25:  # ハズレ 25%
-        lose_type = random.choice(["small_coins", "big_lose", "curse", "msg1", "msg2"])
-        return "lose", lose_type
-
-    if r < 0.95:  # 通常 70%
-        reward_type = random.choice(["xp_boost", "attack_up", "coins", "login_bonus_2x"])
-        if reward_type == "xp_boost":
-            return "normal", {"type": "xp_boost", "duration": 30 * 60, "value": 2.0}
-        elif reward_type == "attack_up":
-            return "normal", {"type": "attack_up", "duration": 15 * 60, "value": 1.2}
-        elif reward_type == "coins":
-            return "normal", {"type": "coins", "amount": random.randint(300, 800)}
-        else:
-            return "normal", {"type": "login_bonus_2x"}
-
-    # レア 5%
-    rare_type = random.choice(["coins", "boss_slayer", "rare_role"])
-    if rare_type == "coins":
-        return "rare", {"type": "coins", "amount": 5000}
-    elif rare_type == "boss_slayer":
-        return "rare", {"type": "boss_slayer", "duration": 30 * 60, "value": 1.5}
-    else:
-        return "rare", {"type": "rare_role"}
-
-# =========================
-# /openbox（ミステリーボックス購入＆使用）
-# =========================
-_openbox_cooldowns = {}
-
-@bot.tree.command(name="openbox", description="🎁 ミステリーボックスを購入して開ける（3000コイン）")
-async def openbox(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    ck = f"{guild_id}:{user_id}"
-    now = time.time()
-
-    if ck in _openbox_cooldowns and now - _openbox_cooldowns[ck] < 30:
-        remain = int(30 - (now - _openbox_cooldowns[ck]))
-        await interaction.response.send_message(f"⏳ あと **{remain}秒** 待ってから開けてください！", ephemeral=True)
-        return
-
-    data  = load_data(guild_id)
-    info  = ensure_user_data(data, user_id)
-    price = SHOP_ITEMS["mystery_box"]["price"]
-
-    if not spend_coins(data, user_id, price, "buy_mystery_box"):
-        await interaction.response.send_message(
-            f"コインが足りません。\n必要: **{price:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
-        )
-        return
-
-    _openbox_cooldowns[ck] = now
-    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
-    shop_log = load_shop_log(guild_id)
-    week_key = datetime.now(JST).strftime("%Y-W%W")
-    shop_log.setdefault(week_key, {})
-    shop_log[week_key]["mystery_box"] = shop_log[week_key].get("mystery_box", 0) + 1
-    save_shop_log(guild_id, shop_log)
-
-    rarity, reward = draw_mystery_box()
-
-    # ハズレ処理
-    if rarity == "lose":
-        LOSE_PATTERNS = {
-            "small_coins": ("空箱だった…\n\nせめてもの慰めに 💰 **+50コイン** をどうぞ。",    50),
-            "big_lose":    ("完全な空箱だった…！\n\n慰めに 💰 **+100コイン** をどうぞ。",    100),
-            "curse":       ("💀 **呪いのボックス！！**\n\nXPが **-50** 削られてしまった…！", 0),
-            "msg1":        ("ゴロゴロ…カラン…\n\n**何も入っていなかった。** 💰 **+100コイン**", 100),
-            "msg2":        ("箱を開けたら説明書だけ入ってた。\n\n💰 **+100コイン** で許して。", 100),
-        }
-        msg, coin_back = LOSE_PATTERNS[reward]
-
-        if reward == "curse":
-            info["xp"] = max(0, info.get("xp", 0) - 50)
-        else:
-            info["coins"] = info.get("coins", 0) + coin_back
-            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_back
-
-        save_data(guild_id, data)
-        embed = discord.Embed(
-            title="📦 ミステリーボックスを開けた！",
-            description=msg,
-            color=discord.Color.greyple()
-        )
-        embed.set_footer(text="次こそはレアが出るかも…？")
-        await interaction.response.send_message(embed=embed)
-        return
-
-    # 通常・レア報酬付与
-    embed_color = discord.Color.gold() if rarity == "normal" else discord.Color.from_rgb(255, 50, 200)
-    reward_text = ""
-
-    if reward["type"] == "coins":
-        amount = reward["amount"]
-        info["coins"] = info.get("coins", 0) + amount
-        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + amount
-        reward_text = f"💰 **+{amount:,}コイン** 獲得！"
-    elif reward["type"] == "login_bonus_2x":
-        info["login_bonus_2x"] = True
-        reward_text = "🎁 **翌日のログインボーナス2倍チケット** 獲得！\n次回ログイン時に自動適用されます。"
-    elif reward["type"] == "xp_boost":
-        add_timed_buff(info, "xp_multiplier", reward["value"], reward["duration"], "mystery_xp_boost")
-        reward_text = f"⚡ **XPブースト {reward['value']}倍**（30分）獲得！"
-    elif reward["type"] == "attack_up":
-        add_timed_buff(info, "damage_multiplier", reward["value"], reward["duration"], "mystery_attack")
-        reward_text = f"⚔️ **攻撃力アップ {reward['value']}倍**（15分）獲得！"
-    elif reward["type"] == "boss_slayer":
-        add_timed_buff(info, "boss_damage_multiplier", reward["value"], reward["duration"], "mystery_boss")
-        reward_text = f"🗡️ **ボス特効 {reward['value']}倍**（30分）獲得！"
-    elif reward["type"] == "rare_role":
-        role_name = "🎁 ミステリー当選者"
-        role = discord.utils.get(interaction.guild.roles, name=role_name)
-        if not role:
-            try:
-                role = await interaction.guild.create_role(
-                    name=role_name, color=discord.Color.from_rgb(255, 215, 0), reason="ミステリーボックス レア称号"
-                )
-            except discord.Forbidden:
-                role = None
-        if role:
-            try:
-                await interaction.user.add_roles(role)
-            except discord.Forbidden:
-                pass
-        reward_text = f"👑 **レア称号「{role_name}」** を獲得！"
-
-    save_data(guild_id, data)
-
-    title  = "🌟✨ レア報酬！！ ✨🌟" if rarity == "rare" else "📦 ミステリーボックスを開けた！"
-    prefix = "🎊 おめでとうございます！！\n\n" if rarity == "rare" else ""
-    embed  = discord.Embed(title=title, description=f"{prefix}{reward_text}", color=embed_color)
-    await interaction.response.send_message(embed=embed)
-
-
-# =========================
-# 投資パック定数・抽選
-# =========================
-INVEST_TABLE = [
-    (0.5, 0.40, "大暴落…",       "📉"),
-    (1.0, 0.35, "元本割れなし",  "📊"),
-    (1.5, 0.20, "安定した利益！", "📊"),
-    (3.0, 0.05, "爆益！！",      "📈"),
-]
-
-def draw_investment():
-    r = random.random()
-    cumulative = 0.0
-    for multiplier, prob, label, emoji in INVEST_TABLE:
-        cumulative += prob
-        if r < cumulative:
-            return multiplier, label, emoji
-    return 1.0, "元本割れなし", "📊"
-
-# =========================
-# /invest（投資パック購入）
-# =========================
-INVEST_MIN    = 500
-INVEST_MAX    = 50000
-INVEST_STEP   = 500
-INVEST_DURATION = 24 * 60 * 60
-
-@bot.tree.command(name="invest", description="📈 コインを投資！500コイン単位で設定可（24時間後に /claiminvest で回収）")
-@discord.app_commands.describe(amount="投資額（500コイン単位・500〜50,000コイン）")
-async def invest(interaction: discord.Interaction, amount: int = 3000):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
-
-    # バリデーション
-    if amount % INVEST_STEP != 0:
-        await interaction.response.send_message(
-            f"❌ 投資額は **{INVEST_STEP:,}コイン単位** で指定してください。\n例：500・1000・3000・10000",
-            ephemeral=True
-        )
-        return
-    if amount < INVEST_MIN or amount > INVEST_MAX:
-        await interaction.response.send_message(
-            f"❌ 投資額は **{INVEST_MIN:,}〜{INVEST_MAX:,}コイン** の範囲で指定してください。",
-            ephemeral=True
-        )
-        return
-
-    inv = info.get("investment")
-    if inv:
-        claim_at = inv["invested_at"] + INVEST_DURATION
-        if time.time() < claim_at:
-            remain = int(claim_at - time.time())
-            h, m = divmod(remain // 60, 60)
-            await interaction.response.send_message(
-                f"📊 現在投資中です。回収可能まで残り **{h}時間{m}分**\n`/claiminvest` で回収してください。", ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                "📊 前回の投資がまだ回収されていません。\n`/claiminvest` で回収してからもう一度どうぞ！", ephemeral=True
-            )
-        return
-
-    if not spend_coins(data, user_id, amount, "buy_investment_pack"):
-        await interaction.response.send_message(
-            f"コインが足りません。\n必要: **{amount:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**", ephemeral=True
-        )
-        return
-
-    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + amount
-    info["investment"] = {"amount": amount, "invested_at": time.time()}
-
-    # ミッション進捗：投資完了
-    add_mission_progress(info, "invest_done", 1)
-    shop_log = load_shop_log(guild_id)
-    week_key = datetime.now(JST).strftime("%Y-W%W")
-    shop_log.setdefault(week_key, {})
-    shop_log[week_key]["investment_pack"] = shop_log[week_key].get("investment_pack", 0) + 1
-    save_shop_log(guild_id, shop_log)
-    save_data(guild_id, data)
-
-    embed = discord.Embed(
-        title="📈 投資完了！",
-        description=(
-            f"**{amount:,}コイン** を投資しました！\n\n"
-            f"24時間後に `/claiminvest` で結果を確認してください。\n"
-            f"運命は…神のみぞ知る🎲"
-        ),
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"投資額：{amount:,}コイン ／ 期待値：約×1.025")
-    await interaction.response.send_message(embed=embed)
-
-# =========================
-# /investstatus（投資状況確認）
-# =========================
-@bot.tree.command(name="investstatus", description="現在の投資状況を確認する")
-async def investstatus(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
-    inv  = info.get("investment")
-
-    if not inv:
-        await interaction.response.send_message(
-            "📊 投資中のパックはありません。`/invest` で投資を始めましょう！", ephemeral=True
-        )
-        return
-
-    claim_at  = inv["invested_at"] + INVEST_DURATION
-    claimable = time.time() >= claim_at
-
-    if claimable:
-        status_text = "✅ **回収可能です！** `/claiminvest` で回収してください。"
-        color = discord.Color.green()
-    else:
-        remain = int(claim_at - time.time())
-        h, m   = divmod(remain // 60, 60)
-        status_text = f"⏳ 回収まで残り **{h}時間{m}分**"
-        color = discord.Color.orange()
-
-    embed = discord.Embed(title="📊 投資状況", color=color)
-    embed.add_field(name="投資額", value=f"{inv['amount']:,}コイン", inline=True)
-    embed.add_field(name="状態",   value=status_text, inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# =========================
-# /claiminvest（投資回収）
-# =========================
-@bot.tree.command(name="claiminvest", description="投資パックの結果を回収する")
-async def claiminvest(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    data = load_data(guild_id)
-    info = ensure_user_data(data, user_id)
-    inv  = info.get("investment")
-
-    if not inv:
-        await interaction.response.send_message(
-            "📊 投資中のパックがありません。`/invest` で投資を始めましょう！", ephemeral=True
-        )
-        return
-
-    if time.time() < inv["invested_at"] + INVEST_DURATION:
-        remain = int(inv["invested_at"] + INVEST_DURATION - time.time())
-        h, m   = divmod(remain // 60, 60)
-        await interaction.response.send_message(
-            f"⏳ まだ回収できません。あと **{h}時間{m}分** 待ってください！", ephemeral=True
-        )
-        return
-
-    amount               = inv["amount"]
-    multiplier, label, emoji = draw_investment()
-    payout               = int(amount * multiplier)
-    profit               = payout - amount
-
-    info["coins"]               = info.get("coins", 0) + payout
-    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + payout
-    info["investment"]          = None
-    save_data(guild_id, data)
-
-    if multiplier >= 3.0:
-        color = discord.Color.from_rgb(255, 215, 0)
-    elif multiplier >= 1.5:
-        color = discord.Color.green()
-    elif multiplier == 1.0:
-        color = discord.Color.blue()
-    else:
-        color = discord.Color.red()
-
-    profit_text = f"+{profit:,}" if profit >= 0 else f"{profit:,}"
-    embed = discord.Embed(
-        title=f"{emoji} {label}",
-        description=(
-            f"投資額：**{amount:,}コイン**\n"
-            f"倍率：**×{multiplier}**\n"
-            f"回収額：**{payout:,}コイン**（{profit_text}コイン）"
-        ),
-        color=color
-    )
-    await interaction.response.send_message(embed=embed)
-
-
-# =========================
-# ROYAL PASS
-# =========================
-ROYAL_PASS_ROLE = "👑 ROYAL PASS"
-ROYAL_PASS_XP_BONUS     = 1.2   # XP +20%
-ROYAL_PASS_DAILY_BONUS  = 1.5   # デイリー報酬 +50%
-ROYAL_PASS_DURATION     = 7 * 24 * 60 * 60
-
-@bot.tree.command(name="buyroyal", description="👑 ROYAL PASSを購入する（50,000コイン・7日間）")
-async def buyroyal(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-    user_id  = str(interaction.user.id)
-    data     = load_data(guild_id)
-    info     = ensure_user_data(data, user_id)
-    price    = SHOP_ITEMS["royal_pass"]["price"]
-
-    # 既に有効なROYAL PASSを持っているか確認
-    cleanup_expired_buffs(info)
-    if info.get("buffs", {}).get("royal_pass"):
-        expires_at = info["buffs"]["royal_pass"].get("expires_at", 0)
-        remain     = max(0, int(expires_at - time.time()))
-        d, r       = divmod(remain, 86400)
-        h, _       = divmod(r, 3600)
-        await interaction.response.send_message(
-            f"👑 ROYAL PASSは既に有効です！\n残り **{d}日{h}時間**",
-            ephemeral=True
-        )
-        return
-
-    if not spend_coins(data, user_id, price, "buy_royal_pass"):
-        await interaction.response.send_message(
-            f"コインが足りません。\n必要: **{price:,}コイン** ／ 所持: **{info.get('coins',0):,}コイン**",
-            ephemeral=True
-        )
-        return
-
-    # バフ付与（XP・デイリー両方）
-    add_timed_buff(info, "royal_pass",        True,                  ROYAL_PASS_DURATION, "royal_pass")
-    add_timed_buff(info, "xp_multiplier",     ROYAL_PASS_XP_BONUS,  ROYAL_PASS_DURATION, "royal_pass")
-    add_timed_buff(info, "daily_multiplier",  ROYAL_PASS_DAILY_BONUS, ROYAL_PASS_DURATION, "royal_pass")
-
-    # 特別ロール付与
-    role = discord.utils.get(interaction.guild.roles, name=ROYAL_PASS_ROLE)
-    if not role:
-        try:
-            role = await interaction.guild.create_role(
-                name=ROYAL_PASS_ROLE,
-                color=discord.Color.from_rgb(255, 215, 0),
-                reason="ROYAL PASS購入"
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            role = None
-    if role:
-        try:
-            await interaction.user.add_roles(role)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-    # コイン消費記録
-    info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
-    shop_log = load_shop_log(guild_id)
-    week_key = datetime.now(JST).strftime("%Y-W%W")
-    shop_log.setdefault(week_key, {})
-    shop_log[week_key]["royal_pass"] = shop_log[week_key].get("royal_pass", 0) + 1
-    save_shop_log(guild_id, shop_log)
-    save_data(guild_id, data)
-
-    embed = discord.Embed(
-        title="👑 ROYAL PASS 購入完了！",
-        description=(
-            f"{interaction.user.mention} がROYAL PASSを購入しました！\n\n"
-            f"✨ XP獲得量 **+20%**（7日間）\n"
-            f"🎁 デイリー報酬 **+50%**（7日間）\n"
-            f"👑 特別ロール **{ROYAL_PASS_ROLE}** 付与！"
-        ),
-        color=discord.Color.from_rgb(255, 215, 0)
-    )
-    embed.set_footer(text="有効期間：7日間")
-    await interaction.response.send_message(embed=embed)
-
-    # 通知チャンネルにも告知
-    ch_id = get_level_channel_id(guild_id)
-    notify_ch = interaction.guild.get_channel(ch_id) if ch_id else None
-    if notify_ch and notify_ch != interaction.channel:
-        try:
-            await notify_ch.send(
-                f"👑 **{interaction.user.display_name}** が **ROYAL PASS** を購入しました！"
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-
-# =========================
-# /shopstats（人気アイテムTOP5・全期間）
-# =========================
-@bot.tree.command(name="shopstats", description="全期間の人気アイテムTOP5を表示")
-async def shopstats(interaction: discord.Interaction):
-    guild_id = interaction.guild.id
-
-    shop_log = load_shop_log(guild_id)
-
-    # 全週のデータを合算
-    all_time = {}
-    for week_data in shop_log.values():
-        for item_id, count in week_data.items():
-            all_time[item_id] = all_time.get(item_id, 0) + count
-
-    item_ranking = sorted(all_time.items(), key=lambda x: x[1], reverse=True)
-    medals = ["🥇", "🥈", "🥉"]
-    item_lines = []
-    for i, (item_id, count) in enumerate(item_ranking[:5], start=1):
-        item_name = SHOP_ITEMS.get(item_id, {}).get("name", item_id)
-        medal = medals[i - 1] if i <= 3 else f"`{i}.`"
-        item_lines.append(f"{medal} **{item_name}** … {count}回購入")
-
-    item_text = "\n".join(item_lines) if item_lines else "まだデータがありません。"
-
-    embed = discord.Embed(
-        title="🔥 人気アイテム TOP5（全期間）",
-        description=item_text,
-        color=discord.Color.purple()
-    )
-    await interaction.response.send_message(embed=embed)
-
-
-# =========================
-# /servercoinsranking（全サーバー対抗・週間コイン獲得ランキング）
-# =========================
-@bot.tree.command(name="servercoinsranking", description="今週の全サーバーコイン獲得・消費ランキングを表示")
-async def servercoinsranking(interaction: discord.Interaction):
-    await interaction.response.defer()
-
-    medals = ["🥇", "🥈", "🥉"]
-
-    # --- 全サーバーのコイン集計 ---
-    server_earned = []  # (guild_name, total_earned)
-    server_spent  = []  # (guild_name, total_spent)
-
-    for guild in bot.guilds:
-        data = load_data(guild.id)
-        total_earned = sum(
-            info.get("weekly_coins_earned", 0)
-            for uid, info in data.items()
-            if uid != LAST_DECAY_KEY and isinstance(info, dict)
-        )
-        total_spent = sum(
-            info.get("weekly_coins_spent", 0)
-            for uid, info in data.items()
-            if uid != LAST_DECAY_KEY and isinstance(info, dict)
-        )
-        if total_earned > 0:
-            server_earned.append((guild.name, total_earned))
-        if total_spent > 0:
-            server_spent.append((guild.name, total_spent))
-
-    server_earned.sort(key=lambda x: x[1], reverse=True)
-    server_spent.sort(key=lambda x: x[1], reverse=True)
-
-    def build_server_lines(ranking):
-        lines = []
-        for i, (name, coins) in enumerate(ranking[:10], start=1):
-            medal = medals[i - 1] if i <= 3 else f"`{i}.`"
-            lines.append(f"{medal} **{name}** … {coins:,}コイン")
-        return "\n".join(lines) if lines else "まだデータがありません。"
-
-    embed = discord.Embed(
-        title="🌐 全サーバー 週間コインランキング",
-        color=discord.Color.gold()
-    )
-    embed.add_field(name="📈 獲得数 TOP10", value=build_server_lines(server_earned), inline=False)
-    embed.add_field(name="🛍️ 消費数 TOP10", value=build_server_lines(server_spent), inline=False)
-    embed.set_footer(text="集計期間：今週（月曜リセット）")
-    await interaction.followup.send(embed=embed)
 @bot.tree.command(name="rates", description="現在のXPブースト倍率を確認する")
 async def rates(interaction: discord.Interaction):
     guild_id = interaction.guild.id
@@ -4796,6 +3732,8 @@ async def on_ready():
         daily_mission_announce_task.start()
     if not server_link_boss_expiry_task.is_running():
         server_link_boss_expiry_task.start()
+    if not cleanup_spam_cache.is_running():
+        cleanup_spam_cache.start()
 
     # 既存サーバーのconfig確認・ランクロール更新
     for guild in bot.guilds:
