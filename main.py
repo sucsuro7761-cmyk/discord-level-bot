@@ -22,7 +22,7 @@ from utils.constants import (
     DECAY_PERCENT, LAST_DECAY_KEY, DATA_DIR, JST,
     BOT_ADMIN_IDS, is_bot_admin, COIN_DAILY_CAP, SHOP_ITEMS,
     CRIT_TABLE_TEXT, CRIT_TABLE_VC, CRIT_TABLE, calc_crit,
-    BOSS_BASE_HP, BOSS_HP_SCALE,
+    BOSS_BASE_HP, BOSS_HP_SCALE, calc_boss_hp,
     EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_CLEAR_ROLE,
     EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
     GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
@@ -2070,7 +2070,7 @@ async def handle_boss_clear(guild, boss):
     for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
         mvp_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
 
-    next_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** boss["cleared"]))
+    next_hp = calc_boss_hp(boss["cleared"])
 
     if notify_channel:
         embed = discord.Embed(
@@ -2193,7 +2193,7 @@ async def boss_spawn_task():
 
         if boss_was_alive:
             # 討伐失敗：残りHP + 最大HPの20%回復（最大HPを上限とする）
-            old_max_hp = boss.get("max_hp", int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared)))
+            old_max_hp = boss.get("max_hp", calc_boss_hp(cleared))
             remaining_hp = boss.get("hp", old_max_hp)
             recover = int(old_max_hp * 0.2)
             new_hp = min(remaining_hp + recover, old_max_hp)
@@ -2207,7 +2207,7 @@ async def boss_spawn_task():
                 )
         else:
             # 討伐成功 or 初回：通常スケール
-            new_max_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared))
+            new_max_hp = calc_boss_hp(cleared)
             new_hp = new_max_hp
 
         new_boss = {

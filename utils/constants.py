@@ -148,8 +148,24 @@ def calc_crit(base_xp, has_crit_buff, is_vc=False):
 # =========================
 # ボスシステム
 # =========================
-BOSS_BASE_HP   = 30000
-BOSS_HP_SCALE  = 1.2
+BOSS_BASE_HP  = 30000
+BOSS_HP_SCALE = 1.2  # 後方互換用（calc_boss_hp を使うこと）
+
+def calc_boss_hp(cleared: int) -> int:
+    """段階的スケーリングでボスHPを計算する。
+    1〜5回目:  ×1.20（序盤はドラマチック感）
+    6〜15回目: ×1.10（中盤は緩やか）
+    16回目以降: ×1.05（長期でも詰まらない）
+    """
+    hp = BOSS_BASE_HP
+    for i in range(cleared):
+        if i < 5:
+            hp = int(hp * 1.20)
+        elif i < 15:
+            hp = int(hp * 1.10)
+        else:
+            hp = int(hp * 1.05)
+    return hp
 
 EVENT_BOSS_DEFAULT_HP          = 150000
 EVENT_BOSS_CLEAR_ROLE          = "👑BOSS VIP"
