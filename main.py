@@ -2894,6 +2894,47 @@ async def setupall(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 # =========================
+# /cleanupallroles（旧ロール削除・bot管理者専用）
+# =========================
+@bot.tree.command(name="cleanupallroles", description="全サーバーから旧ランクロール（SELECT・PREMIUM）を削除（bot管理者専用）")
+async def cleanupallroles(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    OLD_ROLES = ["SELECT", "PREMIUM"]
+    results = []
+
+    for guild in bot.guilds:
+        deleted = []
+        for role_name in OLD_ROLES:
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                continue
+            try:
+                await role.delete(reason="/cleanupallroles による旧ロール削除")
+                deleted.append(role_name)
+                await asyncio.sleep(0.5)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        if deleted:
+            results.append(f"**{guild.name}**: {', '.join(deleted)} を削除")
+
+    if results:
+        desc = "\n".join(f"　・{r}" for r in results)
+    else:
+        desc = "削除対象のロールが見つかりませんでした。"
+
+    embed = discord.Embed(
+        title="🗑️ 旧ロール削除完了",
+        description=desc,
+        color=discord.Color.orange()
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# =========================
 # =========================
 # /eventboss コマンド群
 # =========================
