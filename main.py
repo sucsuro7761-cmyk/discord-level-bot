@@ -1380,6 +1380,7 @@ async def cleanup_spam_cache():
 # =========================
 LEGEND_MIN_LEVEL       = 101
 LEGEND_BASE_XP         = 10000   # 週間XP最低ライン
+LEGEND_RELAX_ACTIVE    = 5       # 週アクティブ日数がこれ以上なら -1000XP 緩和
 LEGEND_RELAX_BOSS      = 3000    # 週ボスダメージがこれ以上なら -1000XP 緩和
 LEGEND_RELAX_MISSION   = 3       # デイリーミッション週3回以上なら -1000XP 緩和
 LEGEND_RELAX_AMOUNT    = 1000    # 各緩和条件で軽減される必要XP
@@ -1397,8 +1398,10 @@ async def check_legend_maintenance(guild, data, notify_channel):
 
         weekly_xp = info.get("weekly_xp", 0)
 
-        # 緩和条件
+        # 緩和条件（各 -1,000XP、最大 -3,000XP）
         relaxation = 0
+        if len(info.get("weekly_active_days", [])) >= LEGEND_RELAX_ACTIVE:
+            relaxation += LEGEND_RELAX_AMOUNT
         if info.get("weekly_boss_damage", 0) >= LEGEND_RELAX_BOSS:
             relaxation += LEGEND_RELAX_AMOUNT
         if info.get("weekly_missions_cleared", 0) >= LEGEND_RELAX_MISSION:
@@ -1434,6 +1437,7 @@ async def check_legend_maintenance(guild, data, notify_channel):
                 f"{lines}\n\n"
                 "**Legend 維持条件**\n"
                 "・週獲得XP **10,000以上**（メイン）\n"
+                "・週アクティブ日数5日以上 → 必要XP -1,000\n"
                 "・週ボスダメージ3,000以上 → 必要XP -1,000\n"
                 "・デイリーミッション週3回以上達成 → 必要XP -1,000"
             ),
