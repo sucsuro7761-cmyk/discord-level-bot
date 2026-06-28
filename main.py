@@ -3723,14 +3723,8 @@ async def levelstats(interaction: discord.Interaction):
     data = load_data(guild_id)
 
     bands = [
-        ("Lv1〜9    MEMBER Lite", 1,    9),
-        ("Lv10〜29  MEMBER",      10,   29),
-        ("Lv30〜49  CORE",        30,   49),
-        ("Lv50〜74  SELECT",      50,   74),
-        ("Lv75〜99  PREMIUM",     75,   99),
-        ("Lv100〜199 VIP Lite",   100,  199),
-        ("Lv200〜499 VIP",        200,  499),
-        ("Lv500〜    Legend",     500,  99999),
+        (f"Lv{lo}〜{hi}  {name}" if hi < 9999 else f"Lv{lo}〜    {name}", lo, hi)
+        for lo, hi, name in rank_roles
     ]
 
     counts = {label: 0 for label, _, _ in bands}
