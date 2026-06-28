@@ -27,12 +27,14 @@ from utils.constants import (
     EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
     GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
     rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
+    TITLE_DEFINITIONS, title_display,
 )
 from utils.config import (
     load_config, save_config, load_shop_log, save_shop_log,
     get_level_channel_id, set_level_channel_id,
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
+    get_earned_titles, add_earned_title, get_active_title, set_active_title,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -89,6 +91,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def _setup_hook():
     await bot.load_extension("cogs.shop")
+    await bot.load_extension("cogs.titles")
 
 bot.setup_hook = _setup_hook
 
@@ -1377,6 +1380,26 @@ async def weekly_ranking_task():
     if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
         return
 
+    # 週間王者称号チェック（全サーバー比較）
+    server_xp_list = [
+        (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
+    ]
+    if server_xp_list:
+        champion_guild = max(server_xp_list, key=lambda x: x[1])
+        if champion_guild[1] > 0:
+            ch_guild, _ = champion_guild
+            is_new = add_earned_title(ch_guild.id, "weekly_champion")
+            ch_id = get_level_channel_id(ch_guild.id)
+            notify_ch = ch_guild.get_channel(ch_id) if ch_id else None
+            if notify_ch:
+                defn = TITLE_DEFINITIONS["weekly_champion"]
+                msg = (
+                    f"🏆 **週間王者サーバー称号獲得！**\n{defn['name']} — {defn['description']}"
+                    if is_new else
+                    f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
+                )
+                await notify_ch.send(msg)
+
     for guild in bot.guilds:
         gid = guild.id
         if _weekly_announced.get(gid) == today:
@@ -1451,6 +1474,23 @@ async def weekly_ranking_task():
                 color=discord.Color.green()
             )
             await notify_channel.send(embed=embed_act)
+
+        # 週間コイン獲得合計チェック → rich_community 称号
+        rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
+        total_weekly_coins = sum(
+            info.get("weekly_coins_earned", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        if total_weekly_coins >= rich_threshold:
+            is_new = add_earned_title(gid, "rich_community")
+            if is_new and notify_channel:
+                defn = TITLE_DEFINITIONS["rich_community"]
+                await notify_channel.send(
+                    f"💰 **新しい称号を獲得しました！**\n"
+                    f"**{defn['name']}** — {defn['description']}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
 
         for uid in data:
             if uid != LAST_DECAY_KEY:
@@ -2068,6 +2108,20 @@ async def handle_boss_clear(guild, boss):
 
     # イベントボストリガーチェック
     await check_event_boss_trigger(guild, boss.get("cleared", 0))
+
+    # 称号チェック（ボス討伐系）
+    cleared_total = boss.get("cleared", 0)
+    for title_id, defn in TITLE_DEFINITIONS.items():
+        if defn.get("trigger") != "boss_defeat":
+            continue
+        if cleared_total >= defn.get("threshold", 1):
+            is_new = add_earned_title(gid, title_id)
+            if is_new and notify_channel:
+                await notify_channel.send(
+                    f"🏅 **新しい称号を獲得しました！**\n"
+                    f"**{defn['name']}** — {defn['description']}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
 
 # =========================
 # 週ボス：討伐ブースト
@@ -2888,6 +2942,9 @@ async def on_guild_join(guild):
 
     await setup_notification_panel_channel(guild)
 
+    # 導入記念称号を付与
+    add_earned_title(guild.id, "newcomer")
+
     # ===== bot説明チャンネルを作成 =====
     desc_channel = None
     existing_desc = discord.utils.get(guild.text_channels, name="bot説明")
@@ -3195,7 +3252,8 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
             diff      = prev_xp - total_xp
             diff_text = f"次の順位まで **{diff:,} XP**！"
 
-        desc += f"{medal} **{guild.name}**\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
+        t_disp = title_display(get_active_title(guild.id))
+        desc += f"{medal} **{guild.name}**{t_disp}\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:
         desc = "データがありません。"

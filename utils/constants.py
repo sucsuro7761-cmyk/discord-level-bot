@@ -185,6 +185,51 @@ weekly_roles = {
 }
 
 # =========================
+# 称号定義
+# =========================
+# trigger の種類:
+#   "on_join"      : bot 導入時に即時付与
+#   "boss_defeat"  : ボス討伐時にチェック（threshold = 必要討伐回数）
+#   "weekly_reset" : 週間リセット時にチェック
+TITLE_DEFINITIONS: dict[str, dict] = {
+    "newcomer": {
+        "name": "🌱 新参者",
+        "description": "むれちゃんbotを導入した",
+        "trigger": "on_join",
+    },
+    "weekly_champion": {
+        "name": "👑 週間王者サーバー",
+        "description": "サーバー対抗週間XPランキングで1位を獲得",
+        "trigger": "weekly_reset",
+    },
+    "boss_hunter": {
+        "name": "⚔️ ボスハンター",
+        "description": "サーバーで初めてボスを討伐した",
+        "trigger": "boss_defeat",
+        "threshold": 1,
+    },
+    "boss_master": {
+        "name": "💀 ボスマスター",
+        "description": "ボスを通算10回討伐した",
+        "trigger": "boss_defeat",
+        "threshold": 10,
+    },
+    "rich_community": {
+        "name": "💰 リッチコミュニティ",
+        "description": "週間コイン獲得が合計50,000コイン以上",
+        "trigger": "weekly_reset",
+        "threshold": 50000,
+    },
+}
+
+# 称号表示用（サーバー名の後ろに付ける）
+def title_display(title_id: str | None) -> str:
+    """アクティブ称号がある場合に「【称号名】」を返す"""
+    if not title_id or title_id not in TITLE_DEFINITIONS:
+        return ""
+    return f"【{TITLE_DEFINITIONS[title_id]['name']}】"
+
+# =========================
 # デイリーミッション定義
 # =========================
 DAILY_MISSIONS = {

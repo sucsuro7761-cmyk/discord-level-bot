@@ -110,3 +110,32 @@ def clear_notification_role_id(guild_id) -> None:
     if gid in config and "notification_role_id" in config[gid]:
         del config[gid]["notification_role_id"]
         save_config(config)
+
+# =========================
+# 称号
+# =========================
+def get_earned_titles(guild_id) -> list[str]:
+    config = load_config()
+    return config.get(str(guild_id), {}).get("earned_titles", [])
+
+def add_earned_title(guild_id, title_id: str) -> bool:
+    """称号を追加。新規追加の場合 True、既存の場合 False を返す。"""
+    config = load_config()
+    gid = str(guild_id)
+    config.setdefault(gid, {})
+    titles = config[gid].setdefault("earned_titles", [])
+    if title_id in titles:
+        return False
+    titles.append(title_id)
+    save_config(config)
+    return True
+
+def get_active_title(guild_id) -> str | None:
+    config = load_config()
+    return config.get(str(guild_id), {}).get("active_title")
+
+def set_active_title(guild_id, title_id: str | None) -> None:
+    config = load_config()
+    gid = str(guild_id)
+    config.setdefault(gid, {})["active_title"] = title_id
+    save_config(config)
