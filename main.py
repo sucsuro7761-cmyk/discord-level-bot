@@ -22,8 +22,8 @@ from utils.constants import (
     DECAY_PERCENT, LAST_DECAY_KEY, DATA_DIR, JST,
     BOT_ADMIN_IDS, is_bot_admin, COIN_DAILY_CAP, SHOP_ITEMS,
     CRIT_TABLE_TEXT, CRIT_TABLE_VC, CRIT_TABLE, calc_crit,
-    BOSS_BASE_HP, BOSS_HP_SCALE,
-    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_CLEAR_ROLE,
+    BOSS_BASE_HP, BOSS_HP_SCALE, calc_boss_hp,
+    EVENT_BOSS_DEFAULT_HP, EVENT_BOSS_HP_MULTIPLIER, EVENT_BOSS_CLEAR_ROLE,
     EVENT_BOSS_CONSECUTIVE_CLEARS, EVENT_BOSS_BOOST_MULTIPLIER, EVENT_BOSS_BOOST_DAYS,
     GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
     rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
@@ -688,8 +688,10 @@ async def on_message(message):
         boss["damage"][user_id] = boss["damage"].get(user_id, 0) + actual_dmg
         boss["hp"] = max(0, boss["hp"] - actual_dmg)
 
-        # ミッション進捗：ボスダメージ
+        # ミッション進捗・週間ボスダメージ集計
         add_mission_progress(ensure_user_data(data, user_id), "boss_damage", actual_dmg)
+        u_info = ensure_user_data(data, user_id)
+        u_info["weekly_boss_damage"] = u_info.get("weekly_boss_damage", 0) + actual_dmg
 
         if boss["hp"] <= 0:
             boss["active"] = False
@@ -1373,6 +1375,80 @@ async def cleanup_spam_cache():
     for ck in to_delete:
         del spam_message_times[ck]
 
+# =========================
+# Legend 維持チェック
+# =========================
+LEGEND_MIN_LEVEL       = 101
+LEGEND_BASE_XP         = 10000   # 週間XP最低ライン
+LEGEND_RELAX_ACTIVE    = 5       # 週アクティブ日数がこれ以上なら -1000XP 緩和
+LEGEND_RELAX_BOSS      = 3000    # 週ボスダメージがこれ以上なら -1000XP 緩和
+LEGEND_RELAX_MISSION   = 3       # デイリーミッション週3回以上なら -1000XP 緩和
+LEGEND_RELAX_AMOUNT    = 1000    # 各緩和条件で軽減される必要XP
+
+async def check_legend_maintenance(guild, data, notify_channel):
+    """Legend（Lv101以上）の週間維持チェック。条件未達成で -5 レベル降格。"""
+    demoted = []
+
+    for uid, info in data.items():
+        if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+            continue
+        level = info.get("level", 1)
+        if level < LEGEND_MIN_LEVEL:
+            continue
+
+        weekly_xp = info.get("weekly_xp", 0)
+
+        # 緩和条件（各 -1,000XP、最大 -3,000XP）
+        relaxation = 0
+        if len(info.get("weekly_active_days", [])) >= LEGEND_RELAX_ACTIVE:
+            relaxation += LEGEND_RELAX_AMOUNT
+        if info.get("weekly_boss_damage", 0) >= LEGEND_RELAX_BOSS:
+            relaxation += LEGEND_RELAX_AMOUNT
+        if info.get("weekly_missions_cleared", 0) >= LEGEND_RELAX_MISSION:
+            relaxation += LEGEND_RELAX_AMOUNT
+
+        threshold = LEGEND_BASE_XP - relaxation
+
+        if weekly_xp >= threshold:
+            continue
+
+        # 維持失敗 → -5 レベル
+        new_level = max(1, level - 5)
+        info["level"] = new_level
+        info["xp"] = 0
+
+        member = guild.get_member(int(uid))
+        if member:
+            try:
+                await update_rank_role(member, new_level)
+            except Exception:
+                pass
+
+        demoted.append((uid, level, new_level, weekly_xp, threshold))
+
+    if demoted and notify_channel:
+        lines = "\n".join(
+            f"<@{uid}> Lv**{old}** → Lv**{new}**（週XP: {xp:,} / 必要: {thresh:,}）"
+            for uid, old, new, xp, thresh in demoted
+        )
+        embed = discord.Embed(
+            title="⚠️ Legend 維持条件未達成",
+            description=(
+                f"{lines}\n\n"
+                "**Legend 維持条件**\n"
+                "・週獲得XP **10,000以上**（メイン）\n"
+                "・週アクティブ日数5日以上 → 必要XP -1,000\n"
+                "・週ボスダメージ3,000以上 → 必要XP -1,000\n"
+                "・デイリーミッション週3回以上達成 → 必要XP -1,000"
+            ),
+            color=discord.Color.red()
+        )
+        try:
+            await notify_channel.send(embed=embed)
+        except Exception:
+            pass
+
+
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
@@ -1493,6 +1569,9 @@ async def weekly_ranking_task():
                     f"`/settitle` で表示する称号を設定できます！"
                 )
 
+        # Legend 維持チェック（XPリセット前に実行）
+        await check_legend_maintenance(guild, data, notify_channel)
+
         for uid in data:
             if uid != LAST_DECAY_KEY:
                 data[uid]["weekly_xp"] = 0
@@ -1502,6 +1581,8 @@ async def weekly_ranking_task():
                 data[uid]["weekly_coins_spent"] = 0
                 data[uid]["weekly_coins_earned"] = 0
                 data[uid]["coin_daily_earned"] = 0
+                data[uid]["weekly_missions_cleared"] = 0
+                data[uid]["weekly_boss_damage"] = 0
         save_data(gid, data)
 
 # =========================
@@ -1824,14 +1905,19 @@ async def check_event_boss_trigger(guild, consecutive_clears):
 
     # トリガー条件チェック（累計クリア数が5の倍数に達したら発動）
     if consecutive_clears > 0 and consecutive_clears % EVENT_BOSS_CONSECUTIVE_CLEARS == 0:
-        await spawn_event_boss(guild, event_boss.get("name", "大魔王"))
+        await spawn_event_boss(guild, event_boss.get("name", "大魔王"), weekly_cleared=consecutive_clears)
 
-async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplier=None):
+async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplier=None, weekly_cleared=None):
     gid = guild.id
     ch_id = get_level_channel_id(gid)
     notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-    event_hp = hp if hp else EVENT_BOSS_DEFAULT_HP
+    if hp is not None:
+        event_hp = hp
+    elif weekly_cleared is not None:
+        event_hp = int(calc_boss_hp(weekly_cleared) * EVENT_BOSS_HP_MULTIPLIER)
+    else:
+        event_hp = EVENT_BOSS_DEFAULT_HP
     boost_days = days if days else EVENT_BOSS_BOOST_DAYS
     boost_multi = boost_multiplier if boost_multiplier else EVENT_BOSS_BOOST_MULTIPLIER
 
@@ -2070,7 +2156,7 @@ async def handle_boss_clear(guild, boss):
     for i, (uid, dmg) in enumerate(sorted_dmg[:3]):
         mvp_text += f"{medals[i]} <@{uid}> - {dmg}ダメージ\n"
 
-    next_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** boss["cleared"]))
+    next_hp = calc_boss_hp(boss["cleared"])
 
     if notify_channel:
         embed = discord.Embed(
@@ -2193,7 +2279,7 @@ async def boss_spawn_task():
 
         if boss_was_alive:
             # 討伐失敗：残りHP + 最大HPの20%回復（最大HPを上限とする）
-            old_max_hp = boss.get("max_hp", int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared)))
+            old_max_hp = boss.get("max_hp", calc_boss_hp(cleared))
             remaining_hp = boss.get("hp", old_max_hp)
             recover = int(old_max_hp * 0.2)
             new_hp = min(remaining_hp + recover, old_max_hp)
@@ -2207,7 +2293,7 @@ async def boss_spawn_task():
                 )
         else:
             # 討伐成功 or 初回：通常スケール
-            new_max_hp = int(BOSS_BASE_HP * (BOSS_HP_SCALE ** cleared))
+            new_max_hp = calc_boss_hp(cleared)
             new_hp = new_max_hp
 
         new_boss = {
@@ -2355,6 +2441,75 @@ async def boss_damage_report():
                 await notify_channel.send(embed=embed)
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
+
+# =========================
+# 週ボス：ラストチャンス通知（日曜22時）
+# ボスがまだ生きている場合のみ通知
+# =========================
+_boss_last_chance_fired = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def boss_last_chance_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+
+    if not (now.weekday() == 6 and now.hour == 22 and now.minute == 0):
+        return
+
+    today = now.strftime("%Y-%m-%d")
+    if _boss_last_chance_fired.get(today):
+        return
+    _boss_last_chance_fired[today] = True
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    for guild in bot.guilds:
+        gid = guild.id
+        boss = load_boss(gid)
+
+        if not boss.get("active"):
+            continue  # 既に討伐済みなら通知しない
+
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if not notify_channel:
+            continue
+
+        max_hp     = boss.get("max_hp", 1)
+        current_hp = boss.get("hp", 0)
+        progress   = (max_hp - current_hp) / max_hp
+        bar        = "█" * int(20 * progress) + "░" * (20 - int(20 * progress))
+        percent    = int(progress * 100)
+
+        sorted_dmg = sorted(boss["damage"].items(), key=lambda x: x[1], reverse=True)
+        top_text = "\n".join(
+            f"{medals[i]} <@{uid}> - {dmg:,}ダメージ"
+            for i, (uid, dmg) in enumerate(sorted_dmg[:3])
+        ) or "まだ誰も攻撃していません！"
+
+        embed = discord.Embed(
+            title="⏰ ラストチャンス！今夜中にボスを倒せ！",
+            description=(
+                f"月曜**6:00**にリセット！残り約**8時間**！\n\n"
+                f"討伐できないとボスが**20%回復**して翌週も出現します…\n"
+                f"今すぐメッセージを送って攻撃しよう！"
+            ),
+            color=discord.Color.orange()
+        )
+        embed.add_field(
+            name="❤️ 残りHP",
+            value=f"`{bar}` {percent}%削った！\n{current_hp:,} / {max_hp:,}",
+            inline=False
+        )
+        embed.add_field(name="🏆 現在のTOP3", value=top_text, inline=False)
+        embed.set_footer(text="月曜6:00にリセット・倒せなかった場合はボスが20%回復して再出現")
+
+        try:
+            mention = get_notification_mention(guild)
+            await notify_channel.send(content=mention or None, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 
 # 招待報酬（新規参加時に招待者へ500コイン）
@@ -2528,8 +2683,7 @@ async def setuproles(interaction: discord.Interaction):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2568,7 +2722,7 @@ async def setuproles(interaction: discord.Interaction):
         role_order = [
             "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
-            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "Legend", "VIP", "VIP Lite", "Premiere",
             "CORE", "MEMBER", "MEMBER Lite",
             "⚔️ボス討伐者", "PHOTO+"
         ]
@@ -2645,8 +2799,7 @@ async def setupall(interaction: discord.Interaction):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2659,7 +2812,7 @@ async def setupall(interaction: discord.Interaction):
     role_order = [
         "むれちゃんbotお知らせ",
         "🥇週間王者", "🥈週間準王", "🥉週間三位",
-        "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+        "Legend", "VIP", "VIP Lite", "Premiere",
         "CORE", "MEMBER", "MEMBER Lite",
         "⚔️ボス討伐者", "PHOTO+"
     ]
@@ -2737,6 +2890,47 @@ async def setupall(interaction: discord.Interaction):
         title="🔧 全サーバーセットアップ完了",
         description=desc,
         color=discord.Color.green()
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# =========================
+# /cleanupallroles（旧ロール削除・bot管理者専用）
+# =========================
+@bot.tree.command(name="cleanupallroles", description="全サーバーから旧ランクロール（SELECT・PREMIUM）を削除（bot管理者専用）")
+async def cleanupallroles(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    OLD_ROLES = ["SELECT", "PREMIUM"]
+    results = []
+
+    for guild in bot.guilds:
+        deleted = []
+        for role_name in OLD_ROLES:
+            role = discord.utils.get(guild.roles, name=role_name)
+            if not role:
+                continue
+            try:
+                await role.delete(reason="/cleanupallroles による旧ロール削除")
+                deleted.append(role_name)
+                await asyncio.sleep(0.5)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        if deleted:
+            results.append(f"**{guild.name}**: {', '.join(deleted)} を削除")
+
+    if results:
+        desc = "\n".join(f"　・{r}" for r in results)
+    else:
+        desc = "削除対象のロールが見つかりませんでした。"
+
+    embed = discord.Embed(
+        title="🗑️ 旧ロール削除完了",
+        description=desc,
+        color=discord.Color.orange()
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2845,8 +3039,7 @@ async def on_guild_join(guild):
         {"name": "MEMBER Lite",  "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "MEMBER",       "color": discord.Color.from_rgb(59,  165,  93)},
         {"name": "CORE",         "color": discord.Color.from_rgb(31,  139,  76)},
-        {"name": "SELECT",       "color": discord.Color.from_rgb(78,   93, 148)},
-        {"name": "PREMIUM",      "color": discord.Color.from_rgb(255, 168,   0)},
+        {"name": "Premiere",     "color": discord.Color.from_rgb(78,   93, 148)},
         {"name": "VIP Lite",     "color": discord.Color.from_rgb(163,  73, 164)},
         {"name": "VIP",          "color": discord.Color.from_rgb(113,  54, 138)},
         {"name": "Legend",       "color": discord.Color.from_rgb( 85, 205, 252)},
@@ -2884,7 +3077,7 @@ async def on_guild_join(guild):
         role_order = [
             "むれちゃんbotお知らせ",
             "🥇週間王者", "🥈週間準王", "🥉週間三位",
-            "Legend", "VIP", "VIP Lite", "PREMIUM", "SELECT",
+            "Legend", "VIP", "VIP Lite", "Premiere",
             "CORE", "MEMBER", "MEMBER Lite",
             "⚔️ボス討伐者", "PHOTO+"
         ]
@@ -2994,13 +3187,12 @@ async def on_guild_join(guild):
             description=(
                 "レベルに応じて自動でロールが変わります！\n\n"
                 "Lv1〜9：MEMBER Lite\n"
-                "Lv10〜29：MEMBER\n"
-                "Lv30〜49：CORE\n"
-                "Lv50〜74：SELECT\n"
-                "Lv75〜99：PREMIUM\n"
-                "Lv100〜199：VIP Lite\n"
-                "Lv200〜499：VIP\n"
-                "Lv500〜：💎 Legend\n\n"
+                "Lv10〜19：MEMBER\n"
+                "Lv20〜29：CORE\n"
+                "Lv30〜49：Premiere\n"
+                "Lv50〜74：VIP Lite\n"
+                "Lv75〜100：VIP\n"
+                "Lv101〜：💎 Legend（維持条件あり）\n\n"
                 "🌟 **Lv3達成で PHOTO+ ロールを永久取得！**\n"
                 "🥇 **週間TOP3には週間ロールを付与！**\n"
                 "⚔️ **ボス討伐ごとに LV〇〇ボス討伐者 ロールを付与！（月曜リセット）**\n"
@@ -3724,6 +3916,8 @@ async def on_ready():
         boss_spawn_task.start()
     if not boss_damage_report.is_running():
         boss_damage_report.start()
+    if not boss_last_chance_task.is_running():
+        boss_last_chance_task.start()
     if not server_ranking_task.is_running():
         server_ranking_task.start()
     if not rankdown_check_task.is_running():

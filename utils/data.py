@@ -130,6 +130,8 @@ def ensure_user_data(data: dict, user_id: str) -> dict:
     info.setdefault("coin_total_spent", 0)
     info.setdefault("weekly_coins_earned", 0)
     info.setdefault("weekly_coins_spent", 0)
+    info.setdefault("weekly_missions_cleared", 0)
+    info.setdefault("weekly_boss_damage", 0)
     info.setdefault("last_active_date", "")
     info.setdefault("level_down_streak", 0)
     info.setdefault("decay_warning_days", 0)

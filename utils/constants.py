@@ -148,10 +148,27 @@ def calc_crit(base_xp, has_crit_buff, is_vc=False):
 # =========================
 # ボスシステム
 # =========================
-BOSS_BASE_HP   = 30000
-BOSS_HP_SCALE  = 1.2
+BOSS_BASE_HP  = 30000
+BOSS_HP_SCALE = 1.2  # 後方互換用（calc_boss_hp を使うこと）
 
-EVENT_BOSS_DEFAULT_HP          = 150000
+def calc_boss_hp(cleared: int) -> int:
+    """段階的スケーリングでボスHPを計算する。
+    1〜5回目:  ×1.20（序盤はドラマチック感）
+    6〜15回目: ×1.10（中盤は緩やか）
+    16回目以降: ×1.05（長期でも詰まらない）
+    """
+    hp = BOSS_BASE_HP
+    for i in range(cleared):
+        if i < 5:
+            hp = int(hp * 1.20)
+        elif i < 15:
+            hp = int(hp * 1.10)
+        else:
+            hp = int(hp * 1.05)
+    return hp
+
+EVENT_BOSS_DEFAULT_HP          = 150000  # 手動召喚時のデフォルト値
+EVENT_BOSS_HP_MULTIPLIER       = 1.5    # 自動出現時: 週ボスHP × この倍率
 EVENT_BOSS_CLEAR_ROLE          = "👑BOSS VIP"
 EVENT_BOSS_CONSECUTIVE_CLEARS  = 5
 EVENT_BOSS_BOOST_MULTIPLIER    = 3
@@ -167,13 +184,12 @@ def get_boss_clear_role_name(cleared: int) -> str:
 # =========================
 rank_roles = [
     (1,   9,    "MEMBER Lite"),
-    (10,  29,   "MEMBER"),
-    (30,  49,   "CORE"),
-    (50,  74,   "SELECT"),
-    (75,  99,   "PREMIUM"),
-    (100, 199,  "VIP Lite"),
-    (200, 499,  "VIP"),
-    (500, 9999, "Legend"),
+    (10,  19,   "MEMBER"),
+    (20,  29,   "CORE"),
+    (30,  49,   "Premiere"),
+    (50,  74,   "VIP Lite"),
+    (75,  100,  "VIP"),
+    (101, 9999, "Legend"),
 ]
 
 permanent_roles = {3: "PHOTO+"}
