@@ -212,6 +212,14 @@ async def setup_notification_panel_channel(guild):
         except discord.Forbidden:
             return
 
+    # 既にパネルが存在する場合はスキップ
+    try:
+        async for msg in panel_ch.history(limit=10):
+            if msg.author == guild.me and msg.embeds and msg.embeds[0].title == "🔔 通知設定パネル":
+                return
+    except (discord.Forbidden, discord.HTTPException):
+        return
+
     embed = discord.Embed(
         title="🔔 通知設定パネル",
         description=(
@@ -521,6 +529,64 @@ async def give_streak_mystery_box(member, guild, channel, streak):
         pass
 
 # =========================
+# デイリーミッション 自動報酬付与
+# =========================
+async def try_auto_claim_mission(guild, member, data, user_id: str) -> bool:
+    """ミッション達成を検知して自動でコイン報酬を付与する。付与した場合 True を返す。"""
+    info = ensure_user_data(data, user_id)
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+
+    if info.get("daily_mission_claimed") == today:
+        return False
+
+    mission  = get_today_mission()
+    m_type   = mission["type"]
+    m_goal   = mission["goal"]
+    m_reward = mission["reward"]
+    m_label  = mission["label"]
+
+    progress = get_mission_progress(info, m_type)
+
+    # ボスが既に討伐済みなら boss_damage ミッションを達成扱い
+    if m_type == "boss_damage" and progress < m_goal:
+        boss = load_boss(guild.id)
+        if not boss.get("active"):
+            progress = m_goal
+
+    if progress < m_goal:
+        return False
+
+    today_earned = info.get("coin_daily_earned", 0)
+    if today_earned >= COIN_DAILY_CAP:
+        return False
+
+    reward_coins = min(m_reward, COIN_DAILY_CAP - today_earned)
+    info["coins"]               = info.get("coins", 0) + reward_coins
+    info["coin_daily_earned"]   = today_earned + reward_coins
+    info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + reward_coins
+    info["weekly_missions_cleared"] = info.get("weekly_missions_cleared", 0) + 1
+    info["daily_mission_claimed"] = today
+
+    ch_id = get_level_channel_id(guild.id)
+    notify_channel = guild.get_channel(ch_id) if ch_id else None
+    if notify_channel:
+        embed = discord.Embed(
+            title="🎯 デイリーミッション達成！",
+            description=(
+                f"{member.mention}\n"
+                f"**{m_label}**\n\n"
+                f"✅ 達成おめでとう！\n"
+                f"💰 **+{reward_coins:,}コイン** を自動付与しました！"
+            ),
+            color=discord.Color.green()
+        )
+        try:
+            await notify_channel.send(embed=embed)
+        except Exception:
+            pass
+
+    return True
+
 # =========================
 @bot.event
 async def on_message(message):
@@ -661,6 +727,7 @@ async def on_message(message):
         info = ensure_user_data(data, user_id)
         add_mission_progress(info, "msg_count", 1)
         add_mission_progress(info, "xp_gained", xp_gain)
+        await try_auto_claim_mission(message.guild, message.author, data, user_id)
 
         # クリティカル発生時に通知
         if crit_name:
@@ -692,6 +759,8 @@ async def on_message(message):
         add_mission_progress(ensure_user_data(data, user_id), "boss_damage", actual_dmg)
         u_info = ensure_user_data(data, user_id)
         u_info["weekly_boss_damage"] = u_info.get("weekly_boss_damage", 0) + actual_dmg
+        if await try_auto_claim_mission(message.guild, message.author, data, user_id):
+            save_data(guild_id, data)
 
         if boss["hp"] <= 0:
             boss["active"] = False
@@ -972,6 +1041,7 @@ async def on_voice_state_update(member, before, after):
                 vc_info_m = ensure_user_data(data, user_id)
                 add_mission_progress(vc_info_m, "vc_minutes", 0.5)
                 add_mission_progress(vc_info_m, "xp_gained", gain)
+                await try_auto_claim_mission(member.guild, member, data, user_id)
 
                 # VCクリティカル発生時に通知
                 if crit_name_vc:
@@ -3900,6 +3970,7 @@ async def xpstats(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     bot.add_view(NotificationRoleView())
+    bot.try_auto_claim_mission = try_auto_claim_mission
     synced = await bot.tree.sync()
     print(f"{len(synced)} commands synced | Logged in as {bot.user}")
     print(f"接続中のサーバー: {[g.name for g in bot.guilds]}")

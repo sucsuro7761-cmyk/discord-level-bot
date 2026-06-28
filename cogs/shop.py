@@ -262,6 +262,9 @@ class ShopCog(commands.Cog):
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_gain
 
         add_mission_progress(info, "chest_count", 1)
+        member = interaction.guild.get_member(interaction.user.id)
+        if member and hasattr(self.bot, "try_auto_claim_mission"):
+            await self.bot.try_auto_claim_mission(interaction.guild, member, data, user_id)
         save_data(guild_id, data)
 
         embed = discord.Embed(
@@ -314,13 +317,14 @@ class ShopCog(commands.Cog):
                     f"**{m_label}**\n\n"
                     f"進捗：`{bar}` {progress:.1f} / {m_goal}\n"
                     f"💰 達成報酬：**{m_reward}コイン**\n\n"
-                    f"⏳ まだ未達成です。頑張ろう！"
+                    f"⏳ まだ未達成です。達成すると自動で報酬が付与されます！"
                 ),
                 color=discord.Color.blue()
             )
             await interaction.response.send_message(embed=embed)
             return
 
+        # 達成済みだが自動付与されていない場合のフォールバック
         today_earned = info.get("coin_daily_earned", 0)
         if today_earned >= COIN_DAILY_CAP:
             await interaction.response.send_message(
@@ -505,6 +509,9 @@ class ShopCog(commands.Cog):
         info["investment"] = {"amount": amount, "invested_at": time.time()}
 
         add_mission_progress(info, "invest_done", 1)
+        member = interaction.guild.get_member(interaction.user.id)
+        if member and hasattr(self.bot, "try_auto_claim_mission"):
+            await self.bot.try_auto_claim_mission(interaction.guild, member, data, user_id)
         shop_log = load_shop_log(guild_id)
         week_key = datetime.now(JST).strftime("%Y-W%W")
         shop_log.setdefault(week_key, {})
