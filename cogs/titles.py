@@ -5,6 +5,7 @@ from utils.config import (
     add_earned_title,
     get_active_title,
     get_earned_titles,
+    resolve_display_title,
     set_active_title,
 )
 from utils.constants import TITLE_DEFINITIONS, title_display, weekly_roles
@@ -39,22 +40,30 @@ class TitlesCog(commands.Cog):
             )
             return
 
+        # ランダムモード時の今日の実際の称号
+        today_title = resolve_display_title(guild_id) if active == "random" else active
+
         lines = []
         for tid in earned:
             defn = TITLE_DEFINITIONS.get(tid)
             if not defn:
                 continue
-            star = "✅ **（表示中）**" if tid == active else ""
+            if active == "random":
+                star = "🎲 **（ランダム中）**" if tid == today_title else ""
+            else:
+                star = "✅ **（表示中）**" if tid == active else ""
             lines.append(f"{defn['name']} {star}\n　└ {defn['description']}")
 
-        active_display = title_display(active)
         embed = discord.Embed(
             title=f"🏅 {interaction.guild.name} の称号コレクション",
             description="\n\n".join(lines),
             color=discord.Color.gold()
         )
-        if active_display:
-            embed.set_footer(text=f"現在表示中の称号：{active_display}")
+        if active == "random":
+            today_defn = TITLE_DEFINITIONS.get(today_title, {})
+            embed.set_footer(text=f"🎲 ランダムモード中 — 今日は「{today_defn.get('name', '?')}」を表示中")
+        elif active:
+            embed.set_footer(text=f"現在表示中の称号：{title_display(active)}")
         else:
             embed.set_footer(text="称号未設定 — /settitle で設定できます")
 
@@ -79,6 +88,22 @@ class TitlesCog(commands.Cog):
         if title_id.lower() in ("none", "なし", "解除"):
             set_active_title(guild_id, None)
             await interaction.response.send_message("✅ 称号を解除しました。", ephemeral=True)
+            return
+
+        # ランダムモード
+        if title_id.lower() == "random":
+            earned = get_earned_titles(guild_id)
+            if not earned:
+                await interaction.response.send_message(
+                    "❌ まだ称号を獲得していないためランダムモードは使用できません。",
+                    ephemeral=True
+                )
+                return
+            set_active_title(guild_id, "random")
+            await interaction.response.send_message(
+                "🎲 **ランダムモード** に設定しました！\n獲得済み称号の中から1日1回ランダムで表示が切り替わります。",
+                ephemeral=True
+            )
             return
 
         earned = get_earned_titles(guild_id)
@@ -111,12 +136,14 @@ class TitlesCog(commands.Cog):
         earned = get_earned_titles(interaction.guild.id)
         choices = [
             discord.app_commands.Choice(
-                name=f"{TITLE_DEFINITIONS[tid]['name']}",
+                name=TITLE_DEFINITIONS[tid]["name"],
                 value=tid
             )
             for tid in earned
             if tid in TITLE_DEFINITIONS and current.lower() in tid.lower()
         ]
+        if "random".startswith(current.lower()) or "ランダム".startswith(current):
+            choices.append(discord.app_commands.Choice(name="🎲 ランダム（1日1回自動切替）", value="random"))
         choices.append(discord.app_commands.Choice(name="（称号を解除する）", value="none"))
         return choices[:25]
 

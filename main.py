@@ -35,6 +35,7 @@ from utils.config import (
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
     get_earned_titles, add_earned_title, get_active_title, set_active_title,
+    resolve_display_title,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -3252,7 +3253,7 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
             diff      = prev_xp - total_xp
             diff_text = f"次の順位まで **{diff:,} XP**！"
 
-        t_disp = title_display(get_active_title(guild.id))
+        t_disp = title_display(resolve_display_title(guild.id))
         desc += f"{medal} **{guild.name}**{t_disp}\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:

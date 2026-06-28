@@ -1,6 +1,13 @@
 import json
 import os
+import random as _random
+from datetime import datetime
+
+import pytz
+
 from .constants import DATA_DIR
+
+_JST = pytz.timezone("Asia/Tokyo")
 
 # =========================
 # Config ファイル I/O（メモリキャッシュ付き）
@@ -139,3 +146,26 @@ def set_active_title(guild_id, title_id: str | None) -> None:
     gid = str(guild_id)
     config.setdefault(gid, {})["active_title"] = title_id
     save_config(config)
+
+def resolve_display_title(guild_id) -> str | None:
+    """表示する称号IDを返す。ランダムモード時は今日の日付でキャッシュして1日1回切り替わる。"""
+    active = get_active_title(guild_id)
+    if active != "random":
+        return active
+
+    config = load_config()
+    gid = str(guild_id)
+    today = datetime.now(_JST).strftime("%Y-%m-%d")
+
+    cache = config.get(gid, {}).get("random_title_cache", {})
+    if cache.get("date") == today and cache.get("title_id"):
+        return cache["title_id"]
+
+    earned = config.get(gid, {}).get("earned_titles", [])
+    if not earned:
+        return None
+
+    chosen = _random.choice(earned)
+    config.setdefault(gid, {})["random_title_cache"] = {"date": today, "title_id": chosen}
+    save_config(config)
+    return chosen

@@ -7,7 +7,7 @@ from datetime import datetime
 import discord
 from discord.ext import commands
 
-from utils.config import get_active_title, get_level_channel_id, load_shop_log, save_shop_log
+from utils.config import get_level_channel_id, load_shop_log, resolve_display_title, save_shop_log
 from utils.constants import COIN_DAILY_CAP, JST, LAST_DECAY_KEY, SHOP_ITEMS, title_display
 from utils.data import (
     add_mission_progress,
@@ -744,7 +744,7 @@ class ShopCog(commands.Cog):
                 for uid, info in data.items()
                 if uid != LAST_DECAY_KEY and isinstance(info, dict)
             )
-            t_disp = title_display(get_active_title(guild.id))
+            t_disp = title_display(resolve_display_title(guild.id))
             display_name = f"{guild.name}{t_disp}"
             if total_earned > 0:
                 server_earned.append((display_name, total_earned))
