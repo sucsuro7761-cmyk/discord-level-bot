@@ -1305,7 +1305,7 @@ async def weeklynote(interaction: discord.Interaction):
         value=(
             f"・週間XP: **{weekly_xp:,}**\n"
             f"・順位: **{current_rank}位** / {total_users}人\n"
-            f"・アクティブ日数: **{active_days}日**"
+            f"・ログイン日数: **{active_days}日**"
         ),
         inline=False
     )
@@ -1511,7 +1511,7 @@ async def check_legend_maintenance(guild, data, notify_channel):
                 f"{lines}\n\n"
                 "**Legend 維持条件**\n"
                 "・週獲得XP **10,000以上**（メイン）\n"
-                "・週アクティブ日数5日以上 → 必要XP -1,000\n"
+                "・週ログイン日数5日以上 → 必要XP -1,000\n"
                 "・週ボスダメージ3,000以上 → 必要XP -1,000\n"
                 "・デイリーミッション週3回以上達成 → 必要XP -1,000"
             ),
