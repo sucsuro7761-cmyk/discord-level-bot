@@ -87,7 +87,11 @@ intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions(roles=True, everyone=False, users=True),
+)
 
 
 async def _setup_hook():
