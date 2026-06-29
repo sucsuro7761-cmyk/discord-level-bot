@@ -1243,15 +1243,15 @@ async def weeklynote(interaction: discord.Interaction):
 
     info = data[user_id]
 
-    # 今週のXP・順位
+    # 今週のXP・全国順位
     weekly_xp = info.get("weekly_xp", 0)
-    sorted_users = sorted(
-        [(uid, d) for uid, d in data.items() if uid != LAST_DECAY_KEY],
-        key=lambda x: x[1].get("weekly_xp", 0),
-        reverse=True
+    global_ranking = get_global_weekly_ranking()
+    total_global = len(global_ranking)
+    current_rank = next(
+        (i + 1 for i, (gid_str, uid, _) in enumerate(global_ranking)
+         if uid == user_id and int(gid_str) == guild_id),
+        0
     )
-    current_rank = next((i+1 for i, (uid, _) in enumerate(sorted_users) if uid == user_id), 0)
-    total_users = len(sorted_users)
 
     # 前週比
     last_xp = info.get("last_weekly_xp", 0)
@@ -1304,7 +1304,7 @@ async def weeklynote(interaction: discord.Interaction):
         name="👤 基本情報",
         value=(
             f"・週間XP: **{weekly_xp:,}**\n"
-            f"・順位: **{current_rank}位** / {total_users}人\n"
+            f"・全国順位: **{current_rank}位** / {total_global}人\n"
             f"・ログイン日数: **{active_days}日**"
         ),
         inline=False
@@ -1523,6 +1523,20 @@ async def check_legend_maintenance(guild, data, notify_channel):
             pass
 
 
+def get_global_weekly_ranking() -> list:
+    """全サーバーの (guild_id_str, user_id_str, weekly_xp) を週XP降順で返す"""
+    entries = []
+    for guild in bot.guilds:
+        data = load_data(guild.id)
+        for uid, info in data.items():
+            if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+                continue
+            xp = info.get("weekly_xp", 0)
+            if xp > 0:
+                entries.append((str(guild.id), uid, xp))
+    return sorted(entries, key=lambda x: x[2], reverse=True)
+
+
 @tasks.loop(minutes=1)
 async def weekly_ranking_task():
     now = datetime.now(JST)
@@ -1531,7 +1545,9 @@ async def weekly_ranking_task():
     if not (now.weekday() == 0 and now.hour == 18 and now.minute == 0):
         return
 
+    # ========================
     # 週間王者称号チェック（全サーバー比較）
+    # ========================
     server_xp_list = [
         (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
     ]
@@ -1554,6 +1570,70 @@ async def weekly_ranking_task():
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
+    # ========================
+    # 全国TOP10 集計・ロール付与・コイン報酬
+    # ========================
+    global_top10 = get_global_weekly_ranking()[:10]
+    weekly_coin_rewards = {1: 3000, 2: 2000, 3: 1000}
+
+    # 前週ロールを全ギルドで剥奪
+    all_weekly_role_names = list(weekly_roles.values())  # 🥇🥈🥉⭐週間Top10
+    for guild in bot.guilds:
+        for role_name in all_weekly_role_names:
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                for member in role.members:
+                    try:
+                        await member.remove_roles(role)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+
+    # TOP10 にロール・コイン付与 & last_weekly_rank 保存
+    top10_text = ""
+    medals = ["🥇", "🥈", "🥉", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+    for rank, (gid_str, uid, xp) in enumerate(global_top10, start=1):
+        guild = bot.get_guild(int(gid_str))
+        if not guild:
+            continue
+        member = guild.get_member(int(uid))
+        role_name = weekly_roles.get(rank) or weekly_roles["top10"]
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role and member:
+            try:
+                await member.add_roles(role)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        coins = weekly_coin_rewards.get(rank, 500)
+        data = load_data(int(gid_str))
+        info = ensure_user_data(data, uid)
+        info["coins"] = info.get("coins", 0) + coins
+        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coins
+        info["last_weekly_rank"] = rank
+        save_data(int(gid_str), data)
+        medal = medals[rank - 1]
+        name = member.display_name if member else f"ID:{uid}"
+        top10_text += f"{medal} **{name}** ({guild.name}) - {xp:,} XP 💰 +{coins:,}コイン\n"
+
+    # 全ギルドに全国TOP10発表 embed を送信
+    if top10_text:
+        embed_global = discord.Embed(
+            title="🌏 週間全国ランキング TOP10 発表！",
+            description=top10_text,
+            color=discord.Color.gold()
+        )
+        embed_global.set_footer(text="全サーバー横断ランキング ／ 来週もがんばろう！")
+        for guild in bot.guilds:
+            ch_id = get_level_channel_id(guild.id)
+            notify_channel = guild.get_channel(ch_id) if ch_id else None
+            if notify_channel:
+                try:
+                    await notify_channel.send(embed=embed_global)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+    # ========================
+    # サーバーごとの処理（活動ボーナス・称号・Legend・リセット）
+    # ========================
     for guild in bot.guilds:
         gid = guild.id
         if _weekly_announced.get(gid) == today:
@@ -1567,57 +1647,10 @@ async def weekly_ranking_task():
         ch_id = get_level_channel_id(gid)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
 
-        sorted_users = sorted(
-            [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
-            key=lambda x: x[1].get("weekly_xp", 0),
-            reverse=True
-        )
-        top3 = sorted_users[:3]
-
-        for role_name in weekly_roles.values():
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                for member in role.members:
-                    try:
-                        await member.remove_roles(role)
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
-
-        weekly_coin_rewards = {1: 3000, 2: 2000, 3: 1000}
-        text = ""
-        for i, (user_id, info) in enumerate(top3, start=1):
-            role = discord.utils.get(guild.roles, name=weekly_roles[i])
-            member = guild.get_member(int(user_id))
-            if role and member:
-                try:
-                    await member.add_roles(role)
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-            coin_r = weekly_coin_rewards.get(i, 0)
-            info["coins"] = info.get("coins", 0) + coin_r
-            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_r
-            text += f"{['🥇','🥈','🥉'][i-1]} <@{user_id}> - {info.get('weekly_xp', 0)} XP 💰 +{coin_r:,}コイン\n"
-
-        if notify_channel:
-            embed = discord.Embed(
-                title="🏆 週間ランキング結果発表！",
-                description=text,
-                color=discord.Color.gold()
-            )
-            try:
-                await notify_channel.send(embed=embed)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-        # 前週データを保存してリセット
-        for i, (uid, info) in enumerate(sorted_users, start=1):
-            info["last_weekly_xp"] = info.get("weekly_xp", 0)
-            info["last_weekly_rank"] = i
-
         # 活動量ボーナス（週1000XP以上 → 500コイン）
         activity_bonus_users = ""
         for uid, info in data.items():
-            if uid == LAST_DECAY_KEY:
+            if uid == LAST_DECAY_KEY or not isinstance(info, dict):
                 continue
             if info.get("weekly_xp", 0) >= 1000:
                 info["coins"] = info.get("coins", 0) + 500
@@ -2815,6 +2848,7 @@ async def setuproles(interaction: discord.Interaction):
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
+        {"name": "⭐週間Top10",  "color": discord.Color.from_rgb(255, 215, 100)},
         {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
         {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
     ]
@@ -2846,7 +2880,7 @@ async def setuproles(interaction: discord.Interaction):
     try:
         role_order = [
             "むれちゃんbotお知らせ",
-            "🥇週間王者", "🥈週間準王", "🥉週間三位",
+            "🥇週間王者", "🥈週間準王", "🥉週間三位", "⭐週間Top10",
             "Legend", "VIP", "VIP Lite", "Premiere",
             "CORE", "MEMBER", "MEMBER Lite",
             "⚔️ボス討伐者", "PHOTO+"
@@ -2931,12 +2965,13 @@ async def setupall(interaction: discord.Interaction):
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
+        {"name": "⭐週間Top10",  "color": discord.Color.from_rgb(255, 215, 100)},
         {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
         {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
     ]
     role_order = [
         "むれちゃんbotお知らせ",
-        "🥇週間王者", "🥈週間準王", "🥉週間三位",
+        "🥇週間王者", "🥈週間準王", "🥉週間三位", "⭐週間Top10",
         "Legend", "VIP", "VIP Lite", "Premiere",
         "CORE", "MEMBER", "MEMBER Lite",
         "⚔️ボス討伐者", "PHOTO+"
@@ -3171,6 +3206,7 @@ async def on_guild_join(guild):
         {"name": "🥇週間王者",   "color": discord.Color.from_rgb(255, 168,   0)},
         {"name": "🥈週間準王",   "color": discord.Color.from_rgb(153, 153, 153)},
         {"name": "🥉週間三位",   "color": discord.Color.from_rgb(180, 100,  40)},
+        {"name": "⭐週間Top10",  "color": discord.Color.from_rgb(255, 215, 100)},
         {"name": "PHOTO+",       "color": discord.Color.from_rgb(255, 255, 255)},
         {"name": "⚔️ボス討伐者", "color": discord.Color.from_rgb(220,  50,  50)},
         {"name": "👑BOSS VIP",   "color": discord.Color.from_rgb(255, 215,   0)},
