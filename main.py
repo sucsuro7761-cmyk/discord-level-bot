@@ -87,7 +87,11 @@ intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions(roles=True, everyone=False, users=True),
+)
 
 
 async def _setup_hook():
@@ -1545,7 +1549,10 @@ async def weekly_ranking_task():
                     if is_new else
                     f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
                 )
-                await notify_ch.send(msg)
+                try:
+                    await notify_ch.send(msg)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
     for guild in bot.guilds:
         gid = guild.id
@@ -1597,7 +1604,10 @@ async def weekly_ranking_task():
                 description=text,
                 color=discord.Color.gold()
             )
-            await notify_channel.send(embed=embed)
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
         # 前週データを保存してリセット
         for i, (uid, info) in enumerate(sorted_users, start=1):
@@ -1620,7 +1630,10 @@ async def weekly_ranking_task():
                 description=f"今週1000XP以上獲得したメンバーへ💰\n\n{activity_bonus_users}",
                 color=discord.Color.green()
             )
-            await notify_channel.send(embed=embed_act)
+            try:
+                await notify_channel.send(embed=embed_act)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
         # 週間コイン獲得合計チェック → rich_community 称号
         rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
@@ -1633,11 +1646,14 @@ async def weekly_ranking_task():
             is_new = add_earned_title(gid, "rich_community")
             if is_new and notify_channel:
                 defn = TITLE_DEFINITIONS["rich_community"]
-                await notify_channel.send(
-                    f"💰 **新しい称号を獲得しました！**\n"
-                    f"**{defn['name']}** — {defn['description']}\n"
-                    f"`/settitle` で表示する称号を設定できます！"
-                )
+                try:
+                    await notify_channel.send(
+                        f"💰 **新しい称号を獲得しました！**\n"
+                        f"**{defn['name']}** — {defn['description']}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
         # Legend 維持チェック（XPリセット前に実行）
         await check_legend_maintenance(guild, data, notify_channel)
@@ -1890,11 +1906,14 @@ async def xp_boost_scheduler():
                 channel = guild.get_channel(ch_id) if ch_id else None
                 if channel:
                     mention = get_notification_mention(guild)
-                    await channel.send(
-                        f"{mention}\n🔥 **XP BOOST START!**\n"
-                        f"XPが **{multiplier}倍** になりました！\n"
-                        f"1時間限定！"
-                    )
+                    try:
+                        await channel.send(
+                            f"{mention}\n🔥 **XP BOOST START!**\n"
+                            f"XPが **{multiplier}倍** になりました！\n"
+                            f"1時間限定！"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
             # 1時間後に終了
             await asyncio.sleep(3600)
@@ -1904,7 +1923,10 @@ async def xp_boost_scheduler():
                 ch_id = get_level_channel_id(guild.id)
                 channel = guild.get_channel(ch_id) if ch_id else None
                 if channel:
-                    await channel.send("⏱ **XP BOOST 終了！**")
+                    try:
+                        await channel.send("⏱ **XP BOOST 終了！**")
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
 # =========================
 # 週間ランキング中間発表（全サーバー・毎日21時）
@@ -1948,7 +1970,10 @@ async def weekly_mid_announcement():
                 color=discord.Color.blue()
             )
             embed.set_footer(text="最終結果は月曜18:00に発表！")
-            await notify_channel.send(embed=embed)
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 # =========================
 # イベントボス read/write
@@ -2032,7 +2057,10 @@ async def spawn_event_boss(guild, boss_name, hp=None, days=None, boost_multiplie
         embed.add_field(name="🎁 討伐報酬", value=f"`{EVENT_BOSS_CLEAR_ROLE}` ロール\nXP **{boost_multi}倍**（{boost_days}日間）", inline=False)
         embed.set_footer(text="全員で力を合わせて倒せ！")
         mention = get_notification_mention(guild)
-        await notify_channel.send(mention or None, embed=embed)
+        try:
+            await notify_channel.send(mention or None, embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 async def handle_global_event_boss_clear(boss):
     """サーバーリンクボス討伐処理"""
@@ -2150,16 +2178,22 @@ async def handle_event_boss_clear(guild, event_boss):
                 f"🔥 XP **{boost_multi}倍ブースト** {boost_days}日間！"
             )
         )
-        await notify_channel.send(embed=embed)
+        try:
+            await notify_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
         # MVPへの特別称号メッセージ
         if mvp_uid:
             mvp_dmg = sorted_dmg[0][1]
-            await notify_channel.send(
-                f"👑 **【伝説の討伐者】**\n"
-                f"<@{mvp_uid}> は今回のイベントボス討伐において **{mvp_dmg:,}ダメージ** を叩き出し、\n"
-                f"サーバー最強の討伐者として歴史に名を刻んだ！"
-            )
+            try:
+                await notify_channel.send(
+                    f"👑 **【伝説の討伐者】**\n"
+                    f"<@{mvp_uid}> は今回のイベントボス討伐において **{mvp_dmg:,}ダメージ** を叩き出し、\n"
+                    f"サーバー最強の討伐者として歴史に名を刻んだ！"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     # XPブーストを設定
     asyncio.create_task(event_boss_boost(guild, notify_channel, boost_multi, boost_days))
@@ -2179,7 +2213,10 @@ async def event_boss_boost(guild, notify_channel, multiplier=None, days=None):
     await asyncio.sleep(d * 24 * 3600)
     set_boss_boost(gid, 1)
     if notify_channel:
-        await notify_channel.send(f"⏱ **イベント討伐ブースト終了！** XPが通常に戻りました。")
+        try:
+            await notify_channel.send(f"⏱ **イベント討伐ブースト終了！** XPが通常に戻りました。")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 # =========================
 # 週ボス：討伐成功処理
@@ -2236,7 +2273,10 @@ async def handle_boss_clear(guild, boss):
         )
         embed.add_field(name="報酬", value=f"🔥 **次のボス出現まで XP 2倍ブースト** 発動！\n`{role_name}` ロール付与！")
         embed.set_footer(text=f"次のボスHP: {next_hp:,}")
-        await notify_channel.send(embed=embed)
+        try:
+            await notify_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     asyncio.create_task(boss_clear_boost(guild, notify_channel))
 
@@ -2261,7 +2301,10 @@ async def handle_boss_clear(guild, boss):
             description=coin_text,
             color=discord.Color.yellow()
         )
-        await notify_channel.send(embed=embed_coin)
+        try:
+            await notify_channel.send(embed=embed_coin)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     # イベントボストリガーチェック
     await check_event_boss_trigger(guild, boss.get("cleared", 0))
@@ -2274,11 +2317,14 @@ async def handle_boss_clear(guild, boss):
         if cleared_total >= defn.get("threshold", 1):
             is_new = add_earned_title(gid, title_id)
             if is_new and notify_channel:
-                await notify_channel.send(
-                    f"🏅 **新しい称号を獲得しました！**\n"
-                    f"**{defn['name']}** — {defn['description']}\n"
-                    f"`/settitle` で表示する称号を設定できます！"
-                )
+                try:
+                    await notify_channel.send(
+                        f"🏅 **新しい称号を獲得しました！**\n"
+                        f"**{defn['name']}** — {defn['description']}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
 # =========================
 # 週ボス：討伐ブースト
@@ -2287,7 +2333,10 @@ async def boss_clear_boost(guild, notify_channel):
     gid = guild.id
     set_boss_boost(gid, 2)
     if notify_channel:
-        await notify_channel.send("🔥 **討伐記念 XP 2倍ブースト開始！** 次のボス出現まで継続！")
+        try:
+            await notify_channel.send("🔥 **討伐記念 XP 2倍ブースト開始！** 次のボス出現まで継続！")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
     now = datetime.now(JST)
     days_until_monday = (7 - now.weekday()) % 7 or 7
@@ -2299,7 +2348,10 @@ async def boss_clear_boost(guild, notify_channel):
 
     set_boss_boost(gid, 1)
     if notify_channel:
-        await notify_channel.send("⏱ **討伐ブースト終了！** 新しいボスが出現しました！")
+        try:
+            await notify_channel.send("⏱ **討伐ブースト終了！** 新しいボスが出現しました！")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 # =========================
 # 週ボス：出現タスク（全サーバー・月曜6時）
@@ -2405,7 +2457,10 @@ async def boss_spawn_task():
             embed.add_field(name="⚔️ 攻撃方法", value="メッセージ送信 or VC参加で自動攻撃！")
             embed.add_field(name="🎁 討伐報酬", value="次のボス出現まで XP 2倍ブースト ＋ 特別ロール")
             embed.set_footer(text="6時間ごとにダメージ報告あり")
-            await notify_channel.send(embed=embed)
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 # =========================
 # 週ボス：ダメージ報告（8時・16時・24時）
