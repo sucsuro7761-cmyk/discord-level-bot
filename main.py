@@ -1960,37 +1960,35 @@ async def weekly_mid_announcement():
     if not (now.hour == 21 and now.minute == 0):
         return
 
+    global_top10 = get_global_weekly_ranking()[:10]
+    if not global_top10:
+        return
+
+    medals = ["🥇", "🥈", "🥉", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+    desc = ""
+    for rank, (gid_str, uid, xp) in enumerate(global_top10, start=1):
+        g = bot.get_guild(int(gid_str))
+        member = g.get_member(int(uid)) if g else None
+        name = member.display_name if member else f"ID:{uid}"
+        server = g.name if g else "不明"
+        desc += f"{medals[rank - 1]} **{name}** ({server}) - {xp:,} XP\n"
+
+    embed = discord.Embed(
+        title="📊 週間全国ランキング 中間発表",
+        description=desc,
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="最終結果は月曜18:00に発表！")
+
     for guild in bot.guilds:
         gid = guild.id
         if _mid_announced_today.get(gid) == today:
             continue
         _mid_announced_today[gid] = today
 
-        data = load_data(gid)
-        if not data:
-            continue
-
         ch_id = get_level_channel_id(gid)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
-
-        sorted_users = sorted(
-            [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
-            key=lambda x: x[1].get("weekly_xp", 0),
-            reverse=True
-        )
-
-        desc = ""
-        medals = ["🥇", "🥈", "🥉", "④", "⑤"]
-        for i, (uid, info) in enumerate(sorted_users[:5]):
-            desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp', 0)} XP\n"
-
         if notify_channel:
-            embed = discord.Embed(
-                title="📊 週間ランキング中間発表",
-                description=desc,
-                color=discord.Color.blue()
-            )
-            embed.set_footer(text="最終結果は月曜18:00に発表！")
             try:
                 await notify_channel.send(embed=embed)
             except (discord.Forbidden, discord.HTTPException):
