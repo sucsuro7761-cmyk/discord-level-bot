@@ -196,6 +196,7 @@ class ShopCog(commands.Cog):
             add_timed_buff(info, item["buff_type"], item["value"], item["duration"], item_id)
 
         info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + item["price"]
+        info["weekly_shop_purchases"] = info.get("weekly_shop_purchases", 0) + 1
 
         shop_log = load_shop_log(interaction.guild.id)
         week_key = datetime.now(JST).strftime("%Y-W%W")
@@ -262,6 +263,7 @@ class ShopCog(commands.Cog):
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_gain
 
         add_mission_progress(info, "chest_count", 1)
+        info["weekly_chest_count"] = info.get("weekly_chest_count", 0) + 1
         member = interaction.guild.get_member(interaction.user.id)
         if member and hasattr(self.bot, "try_auto_claim_mission"):
             await self.bot.try_auto_claim_mission(interaction.guild, member, data, user_id)
@@ -380,6 +382,7 @@ class ShopCog(commands.Cog):
 
         self._openbox_cooldowns[ck] = now
         info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
+        info["weekly_shop_purchases"] = info.get("weekly_shop_purchases", 0) + 1
         shop_log = load_shop_log(guild_id)
         week_key = datetime.now(JST).strftime("%Y-W%W")
         shop_log.setdefault(week_key, {})
@@ -672,6 +675,7 @@ class ShopCog(commands.Cog):
                 pass
 
         info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
+        info["weekly_shop_purchases"] = info.get("weekly_shop_purchases", 0) + 1
         shop_log = load_shop_log(guild_id)
         week_key = datetime.now(JST).strftime("%Y-W%W")
         shop_log.setdefault(week_key, {})

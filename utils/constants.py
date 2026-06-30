@@ -258,3 +258,30 @@ DAILY_MISSIONS = {
     5: {"label": "📈 投資パックを購入する",      "type": "invest_done",  "goal": 1,   "reward": 500},
     6: {"label": "⭐ XPを500獲得する",           "type": "xp_gained",    "goal": 500, "reward": 300},
 }
+
+# =========================
+# ランク維持システム
+# =========================
+# (min_level, required_weekly_xp, penalty_levels, rank_display_name) - 高い順で並べる
+RANK_MAINTENANCE_RULES = [
+    (101, 10000, 5, "Legend"),
+    (75,  5000,  4, "VIP"),
+    (50,  3000,  3, "VIP Lite"),
+    (30,  1500,  2, "Premiere"),
+    (20,  500,   1, "CORE"),
+]
+
+RANK_MAINTENANCE_RELAX_PERCENT = 0.10  # 条件1つあたり必要XPの10%を軽減
+
+RANK_MAINTENANCE_POOL = [
+    ("login_5days",   "週ログイン日数5日以上"),
+    ("boss_3000",     "週ボスダメージ3,000以上"),
+    ("mission_3",     "デイリーミッション週3回以上"),
+    ("coins_1000",    "週コイン獲得1,000以上"),
+    ("consecutive_3", "3日連続ログイン中"),
+    ("shop_purchase", "ショップでアイテムを1つ購入"),
+    ("chest_10",      "チェストを10回開ける"),
+    ("weekly_top10",  "全国週間XPランキングTOP10入り"),
+]
+
+RANK_MAINTENANCE_RELAX_COUNT = 3  # 毎週ランダムで選ぶ条件数

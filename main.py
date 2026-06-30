@@ -28,6 +28,8 @@ from utils.constants import (
     GLOBAL_EVENT_BOSS_FILE, get_boss_clear_role_name,
     rank_roles, permanent_roles, weekly_roles, DAILY_MISSIONS,
     TITLE_DEFINITIONS, title_display,
+    RANK_MAINTENANCE_RULES, RANK_MAINTENANCE_RELAX_PERCENT,
+    RANK_MAINTENANCE_POOL, RANK_MAINTENANCE_RELAX_COUNT,
 )
 from utils.config import (
     load_config, save_config, load_shop_log, save_shop_log,
@@ -1330,6 +1332,39 @@ async def weeklynote(interaction: discord.Interaction):
         value=f"・ダメージ: **{boss_str}**",
         inline=False
     )
+
+    # ランク維持ステータス
+    level = info.get("level", 1)
+    maint_rule = None
+    for min_lv, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+        if level >= min_lv:
+            maint_rule = (min_lv, req_xp, penalty, rank_name)
+            break
+    if maint_rule:
+        min_lv, req_xp, penalty, rank_name = maint_rule
+        relax_conds = get_weekly_relax_conditions()
+        pool_d = dict(RANK_MAINTENANCE_POOL)
+        top10_set: set = set()
+        relax_met = sum(
+            1 for cid in relax_conds
+            if check_relax_condition(cid, info, top10_set, (str(guild_id), user_id))
+        )
+        reduction = int(req_xp * RANK_MAINTENANCE_RELAX_PERCENT * relax_met)
+        threshold = req_xp - reduction
+        status = "✅ 達成中" if weekly_xp >= threshold else "⚠️ 未達成"
+        relax_lines = "\n".join(
+            f"{'✅' if check_relax_condition(cid, info, top10_set, (str(guild_id), user_id)) else '⬜'} {pool_d.get(cid, cid)}"
+            for cid in relax_conds
+        )
+        embed.add_field(
+            name=f"🛡️ ランク維持（{rank_name}） {status}",
+            value=(
+                f"週間XP: **{weekly_xp:,}** / 必要: **{threshold:,}**（基準{req_xp:,} - 緩和{reduction:,}）\n"
+                f"**今週の緩和条件**（達成で各 -10%）\n{relax_lines}"
+            ),
+            inline=False
+        )
+
     embed.set_footer(text=f"集計期間: 月曜リセット ／ Lv{info.get('level', 1)}")
     await interaction.followup.send(embed=embed)
 
@@ -1450,44 +1485,86 @@ async def cleanup_spam_cache():
         del spam_message_times[ck]
 
 # =========================
-# Legend 維持チェック
+# ランク維持チェック
 # =========================
-LEGEND_MIN_LEVEL       = 101
-LEGEND_BASE_XP         = 10000   # 週間XP最低ライン
-LEGEND_RELAX_ACTIVE    = 5       # 週アクティブ日数がこれ以上なら -1000XP 緩和
-LEGEND_RELAX_BOSS      = 3000    # 週ボスダメージがこれ以上なら -1000XP 緩和
-LEGEND_RELAX_MISSION   = 3       # デイリーミッション週3回以上なら -1000XP 緩和
-LEGEND_RELAX_AMOUNT    = 1000    # 各緩和条件で軽減される必要XP
+WEEKLY_RELAX_FILE = os.path.join(DATA_DIR, "weekly_relax_conditions.json")
 
-async def check_legend_maintenance(guild, data, notify_channel):
-    """Legend（Lv101以上）の週間維持チェック。条件未達成で -5 レベル降格。"""
+def get_weekly_relax_conditions() -> list:
+    """現在の週のランダム緩和条件IDリストを返す（なければ新規抽選）"""
+    try:
+        with open(WEEKLY_RELAX_FILE) as f:
+            state = json.load(f)
+        week_key = datetime.now(JST).strftime("%Y-W%W")
+        if state.get("week") == week_key:
+            return state.get("conditions", [])
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return draw_weekly_relax_conditions()
+
+def draw_weekly_relax_conditions() -> list:
+    """新しい週の緩和条件を3つ抽選して保存する"""
+    pool = [cid for cid, _ in RANK_MAINTENANCE_POOL]
+    chosen = random.sample(pool, min(RANK_MAINTENANCE_RELAX_COUNT, len(pool)))
+    week_key = datetime.now(JST).strftime("%Y-W%W")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(WEEKLY_RELAX_FILE, "w") as f:
+        json.dump({"week": week_key, "conditions": chosen}, f)
+    return chosen
+
+def check_relax_condition(cid: str, info: dict, top10_gid_uid_set: set, gid_uid: tuple) -> bool:
+    """ユーザーが指定の緩和条件を達成しているか判定"""
+    if cid == "login_5days":
+        return len(info.get("weekly_active_days", [])) >= 5
+    elif cid == "boss_3000":
+        return info.get("weekly_boss_damage", 0) >= 3000
+    elif cid == "mission_3":
+        return info.get("weekly_missions_cleared", 0) >= 3
+    elif cid == "coins_1000":
+        return info.get("weekly_coins_earned", 0) >= 1000
+    elif cid == "consecutive_3":
+        return info.get("login_streak", 0) >= 3
+    elif cid == "shop_purchase":
+        return info.get("weekly_shop_purchases", 0) >= 1
+    elif cid == "chest_10":
+        return info.get("weekly_chest_count", 0) >= 10
+    elif cid == "weekly_top10":
+        return gid_uid in top10_gid_uid_set
+    return False
+
+async def check_rank_maintenance(guild, data, notify_channel, relax_conditions, top10_gid_uid_set):
+    """CORE以上（Lv20+）の週間維持チェック。条件未達成で降格。"""
+    pool_dict = dict(RANK_MAINTENANCE_POOL)
     demoted = []
 
     for uid, info in data.items():
         if uid == LAST_DECAY_KEY or not isinstance(info, dict):
             continue
         level = info.get("level", 1)
-        if level < LEGEND_MIN_LEVEL:
+
+        rule = None
+        for min_lv, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+            if level >= min_lv:
+                rule = (min_lv, req_xp, penalty, rank_name)
+                break
+
+        if rule is None:
             continue
 
+        min_lv, req_xp, penalty, rank_name = rule
         weekly_xp = info.get("weekly_xp", 0)
 
-        # 緩和条件（各 -1,000XP、最大 -3,000XP）
-        relaxation = 0
-        if len(info.get("weekly_active_days", [])) >= LEGEND_RELAX_ACTIVE:
-            relaxation += LEGEND_RELAX_AMOUNT
-        if info.get("weekly_boss_damage", 0) >= LEGEND_RELAX_BOSS:
-            relaxation += LEGEND_RELAX_AMOUNT
-        if info.get("weekly_missions_cleared", 0) >= LEGEND_RELAX_MISSION:
-            relaxation += LEGEND_RELAX_AMOUNT
-
-        threshold = LEGEND_BASE_XP - relaxation
+        gid_uid = (str(guild.id), uid)
+        relax_count = sum(
+            1 for cid in relax_conditions
+            if check_relax_condition(cid, info, top10_gid_uid_set, gid_uid)
+        )
+        reduction = int(req_xp * RANK_MAINTENANCE_RELAX_PERCENT * relax_count)
+        threshold = req_xp - reduction
 
         if weekly_xp >= threshold:
             continue
 
-        # 維持失敗 → -5 レベル
-        new_level = max(1, level - 5)
+        new_level = max(1, level - penalty)
         info["level"] = new_level
         info["xp"] = 0
 
@@ -1498,28 +1575,28 @@ async def check_legend_maintenance(guild, data, notify_channel):
             except Exception:
                 pass
 
-        demoted.append((uid, level, new_level, weekly_xp, threshold))
+        demoted.append((uid, level, new_level, weekly_xp, threshold, rank_name, relax_count))
 
     if demoted and notify_channel:
+        relax_labels = "\n".join(
+            f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions
+        )
         lines = "\n".join(
-            f"<@{uid}> Lv**{old}** → Lv**{new}**（週XP: {xp:,} / 必要: {thresh:,}）"
-            for uid, old, new, xp, thresh in demoted
+            f"<@{uid}> [{rank}] Lv**{old}** → Lv**{new}**（週XP: {xp:,} / 必要: {thresh:,} | 緩和{rc}条件達成）"
+            for uid, old, new, xp, thresh, rank, rc in demoted
         )
         embed = discord.Embed(
-            title="⚠️ Legend 維持条件未達成",
+            title="⚠️ ランク維持条件未達成",
             description=(
                 f"{lines}\n\n"
-                "**Legend 維持条件**\n"
-                "・週獲得XP **10,000以上**（メイン）\n"
-                "・週ログイン日数5日以上 → 必要XP -1,000\n"
-                "・週ボスダメージ3,000以上 → 必要XP -1,000\n"
-                "・デイリーミッション週3回以上達成 → 必要XP -1,000"
+                "**今週の緩和条件（各 -10% 軽減）**\n"
+                f"{relax_labels}"
             ),
             color=discord.Color.red()
         )
         try:
             await notify_channel.send(embed=embed)
-        except Exception:
+        except (discord.Forbidden, discord.HTTPException):
             pass
 
 
@@ -1571,9 +1648,16 @@ async def weekly_ranking_task():
                     pass
 
     # ========================
+    # 今週の緩和条件を新しく抽選
+    # ========================
+    relax_conditions = draw_weekly_relax_conditions()
+    pool_dict = dict(RANK_MAINTENANCE_POOL)
+
+    # ========================
     # 全国TOP10 集計・ロール付与・コイン報酬
     # ========================
     global_top10 = get_global_weekly_ranking()[:10]
+    top10_gid_uid_set = {(gid_str, uid) for gid_str, uid, _ in global_top10}
     weekly_coin_rewards = {1: 3000, 2: 2000, 3: 1000}
 
     # 前週ロールを全ギルドで剥奪
@@ -1615,11 +1699,17 @@ async def weekly_ranking_task():
         top10_text += f"{medal} **{name}** ({guild.name}) - {xp:,} XP 💰 +{coins:,}コイン\n"
 
     # 全ギルドに全国TOP10発表 embed を送信
+    relax_text = "\n".join(f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions)
     if top10_text:
         embed_global = discord.Embed(
             title="🌏 週間全国ランキング TOP10 発表！",
             description=top10_text,
             color=discord.Color.gold()
+        )
+        embed_global.add_field(
+            name="🛡️ 来週のランク維持緩和条件（各 -10% 軽減）",
+            value=relax_text,
+            inline=False
         )
         embed_global.set_footer(text="全サーバー横断ランキング ／ 来週もがんばろう！")
         for guild in bot.guilds:
@@ -1688,8 +1778,8 @@ async def weekly_ranking_task():
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-        # Legend 維持チェック（XPリセット前に実行）
-        await check_legend_maintenance(guild, data, notify_channel)
+        # ランク維持チェック（XPリセット前に実行）
+        await check_rank_maintenance(guild, data, notify_channel, relax_conditions, top10_gid_uid_set)
 
         for uid in data:
             if uid != LAST_DECAY_KEY:
@@ -1702,6 +1792,8 @@ async def weekly_ranking_task():
                 data[uid]["coin_daily_earned"] = 0
                 data[uid]["weekly_missions_cleared"] = 0
                 data[uid]["weekly_boss_damage"] = 0
+                data[uid]["weekly_chest_count"] = 0
+                data[uid]["weekly_shop_purchases"] = 0
         save_data(gid, data)
 
 # =========================
