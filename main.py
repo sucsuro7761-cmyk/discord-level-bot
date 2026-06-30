@@ -1546,27 +1546,48 @@ async def weekly_ranking_task():
         return
 
     # ========================
-    # 週間王者称号チェック（全サーバー比較）
+    # サーバー対抗戦 最終結果発表 & 週間王者称号チェック
     # ========================
-    server_xp_list = [
-        (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
-    ]
-    if server_xp_list:
-        champion_guild = max(server_xp_list, key=lambda x: x[1])
-        if champion_guild[1] > 0:
-            ch_guild, _ = champion_guild
-            is_new = add_earned_title(ch_guild.id, "weekly_champion")
-            ch_id = get_level_channel_id(ch_guild.id)
-            notify_ch = ch_guild.get_channel(ch_id) if ch_id else None
+    server_results = sorted(
+        [(g, get_server_weekly_xp(g)[0], get_server_weekly_xp(g)[1]) for g in bot.guilds],
+        key=lambda x: x[1], reverse=True
+    )
+    if server_results and server_results[0][1] > 0:
+        champion_guild = server_results[0][0]
+        is_new = add_earned_title(champion_guild.id, "weekly_champion")
+        defn = TITLE_DEFINITIONS["weekly_champion"]
+        champion_label = (
+            f"🏆 **週間王者称号獲得！** {defn['name']}"
+            if is_new else
+            f"🏆 **週間王者称号を防衛！** {defn['name']}"
+        )
+
+        medals = ["🥇", "🥈", "🥉"]
+        desc = ""
+        for i, (g, total_xp, active) in enumerate(server_results, start=1):
+            medal = medals[i - 1] if i <= 3 else f"`{i}.`"
+            crown = " 👑" if i == 1 else ""
+            t_disp = title_display(resolve_display_title(g.id))
+            desc += f"{medal} **{g.name}**{t_disp}{crown}\n　総XP：**{total_xp:,}** ／ 参加{active}人\n"
+
+        embed_battle = discord.Embed(
+            title="⚔️ 週間サーバー対抗戦 最終結果！",
+            description=desc,
+            color=discord.Color.gold()
+        )
+        embed_battle.add_field(
+            name="今週の覇者",
+            value=champion_label,
+            inline=False
+        )
+        embed_battle.set_footer(text="来週もサーバーの仲間と一緒に戦おう！")
+
+        for guild in bot.guilds:
+            ch_id = get_level_channel_id(guild.id)
+            notify_ch = guild.get_channel(ch_id) if ch_id else None
             if notify_ch:
-                defn = TITLE_DEFINITIONS["weekly_champion"]
-                msg = (
-                    f"🏆 **週間王者サーバー称号獲得！**\n{defn['name']} — {defn['description']}"
-                    if is_new else
-                    f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
-                )
                 try:
-                    await notify_ch.send(msg)
+                    await notify_ch.send(embed=embed_battle)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
