@@ -373,83 +373,6 @@ async def check_level_up(member, data, user_id):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-async def check_level_down(guild, data, uid):
-    """
-    維持条件：現在レベル × 100 × 10% = 現在レベル × 10 以上のXPを保有していること
-    （例：Lv100 → 100×100×10% = 1,000XP以上が必要）
-    条件未満が7日間連続で続いた場合のみ1レベルダウン。
-    Lv1以下には落ちない。
-    """
-    info = data.get(uid)
-    if not info or not isinstance(info, dict):
-        return
-
-    current_level = info.get("level", 1)
-    current_xp    = info.get("xp", 0)
-
-    if current_level <= 1:
-        info["level_down_streak"] = 0
-        return
-
-    # 維持に必要なXP = 現在レベル × 100 × 10%
-    required_xp = int(current_level * 100 * 0.1)
-
-    if current_xp >= required_xp:
-        # 条件を満たしているのでストリークをリセット
-        info["level_down_streak"] = 0
-        return
-
-    # 条件未満：連続日数をカウント
-    streak = info.get("level_down_streak", 0) + 1
-    info["level_down_streak"] = streak
-
-    ch_id = get_level_channel_id(guild.id)
-    notify_channel = guild.get_channel(ch_id) if ch_id else None
-    member = guild.get_member(int(uid))
-
-    if streak < 7:
-        # 毎日警告通知（残り日数をお知らせ）
-        remaining = 7 - streak
-        if notify_channel and member:
-            try:
-                await notify_channel.send(
-                    f"⚠️ {member.mention} の保有XPが維持条件（**{required_xp:,}XP**）を下回っています。"
-                    f"あと **{remaining}日** 続くとランクダウンします！（現在：{current_xp:,}XP）"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-        return
-
-    # 7日連続で条件未満 → ランクダウン防止シールドチェック
-    if info.get("buffs", {}).get("rankdown_shield"):
-        # シールドを消費してランクダウンをキャンセル
-        info["buffs"].pop("rankdown_shield", None)
-        info["level_down_streak"] = 0
-        if notify_channel and member:
-            try:
-                await notify_channel.send(
-                    f"🔰 {member.mention} のランクダウン防止シールドが発動！ランクダウンを1回防ぎました。"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-        return
-
-    # 7日連続で条件未満 → 1レベルダウン
-    new_level = max(1, current_level - 1)
-    info["level"] = new_level
-    info["level_down_streak"] = 0  # ストリークリセット
-
-    if member:
-        await update_rank_role(member, new_level)
-
-    if notify_channel and member:
-        try:
-            await notify_channel.send(
-                f"📉 {member.mention} の保有XPが**{required_xp:,}XP**を7日間下回り続けたため、"
-                f"**Lv{current_level} → Lv{new_level}** にランクダウンしました。"
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            pass
 
 async def give_streak_mystery_box(member, guild, channel, streak):
     """7の倍数連続ログイン時にミステリーボックスを自動開封して結果を送信"""
@@ -1830,14 +1753,11 @@ async def decay_task():
             is_active_today = (last_active == today)
 
             if is_active_today:
-                # アクティブ日は減衰なし・streak リセット
-                info["level_down_streak"] = 0
                 continue
 
             # XP減衰ガードが有効なら減衰スキップ
             cleanup_expired_buffs(info)
             if info.get("buffs", {}).get("decay_guard"):
-                info["level_down_streak"] = 0
                 continue
 
             # 非アクティブ日 → B+C方式で減衰
@@ -1965,30 +1885,6 @@ async def daily_mission_announce_task():
                 await notify_channel.send(embed=embed)
             except (discord.Forbidden, discord.HTTPException):
                 pass
-# =========================
-_rankdown_check_fired = {}  # { "YYYY-MM-DD": True }
-
-@tasks.loop(minutes=1)
-async def rankdown_check_task():
-    await bot.wait_until_ready()
-    now = datetime.now(JST)
-    if not (now.hour == 18 and now.minute == 0):
-        return
-    today = now.strftime("%Y-%m-%d")
-    if _rankdown_check_fired.get(today):
-        return
-    _rankdown_check_fired[today] = True
-
-    for guild in bot.guilds:
-        gid = guild.id
-        data = load_data(gid)
-        if not data:
-            continue
-        for uid in list(data.keys()):
-            if uid == LAST_DECAY_KEY:
-                continue
-            await check_level_down(guild, data, uid)
-        save_data(gid, data)
 # =========================
 # XP BOOST TASK（全サーバー）
 # 毎日ランダムな時間帯に2回発動（朝8-11時・夜18-22時）
@@ -4169,8 +4065,6 @@ async def on_ready():
         boss_last_chance_task.start()
     if not server_ranking_task.is_running():
         server_ranking_task.start()
-    if not rankdown_check_task.is_running():
-        rankdown_check_task.start()
     if not daily_mission_announce_task.is_running():
         daily_mission_announce_task.start()
     if not server_link_boss_expiry_task.is_running():
