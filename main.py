@@ -1546,27 +1546,48 @@ async def weekly_ranking_task():
         return
 
     # ========================
-    # 週間王者称号チェック（全サーバー比較）
+    # サーバー対抗戦 最終結果発表 & 週間王者称号チェック
     # ========================
-    server_xp_list = [
-        (g, get_server_weekly_xp(g)[0]) for g in bot.guilds
-    ]
-    if server_xp_list:
-        champion_guild = max(server_xp_list, key=lambda x: x[1])
-        if champion_guild[1] > 0:
-            ch_guild, _ = champion_guild
-            is_new = add_earned_title(ch_guild.id, "weekly_champion")
-            ch_id = get_level_channel_id(ch_guild.id)
-            notify_ch = ch_guild.get_channel(ch_id) if ch_id else None
+    server_results = sorted(
+        [(g, get_server_weekly_xp(g)[0], get_server_weekly_xp(g)[1]) for g in bot.guilds],
+        key=lambda x: x[1], reverse=True
+    )
+    if server_results and server_results[0][1] > 0:
+        champion_guild = server_results[0][0]
+        is_new = add_earned_title(champion_guild.id, "weekly_champion")
+        defn = TITLE_DEFINITIONS["weekly_champion"]
+        champion_label = (
+            f"🏆 **週間王者称号獲得！** {defn['name']}"
+            if is_new else
+            f"🏆 **週間王者称号を防衛！** {defn['name']}"
+        )
+
+        medals = ["🥇", "🥈", "🥉"]
+        desc = ""
+        for i, (g, total_xp, active) in enumerate(server_results, start=1):
+            medal = medals[i - 1] if i <= 3 else f"`{i}.`"
+            crown = " 👑" if i == 1 else ""
+            t_disp = title_display(resolve_display_title(g.id))
+            desc += f"{medal} **{g.name}**{t_disp}{crown}\n　総XP：**{total_xp:,}** ／ 参加{active}人\n"
+
+        embed_battle = discord.Embed(
+            title="⚔️ 週間サーバー対抗戦 最終結果！",
+            description=desc,
+            color=discord.Color.gold()
+        )
+        embed_battle.add_field(
+            name="今週の覇者",
+            value=champion_label,
+            inline=False
+        )
+        embed_battle.set_footer(text="来週もサーバーの仲間と一緒に戦おう！")
+
+        for guild in bot.guilds:
+            ch_id = get_level_channel_id(guild.id)
+            notify_ch = guild.get_channel(ch_id) if ch_id else None
             if notify_ch:
-                defn = TITLE_DEFINITIONS["weekly_champion"]
-                msg = (
-                    f"🏆 **週間王者サーバー称号獲得！**\n{defn['name']} — {defn['description']}"
-                    if is_new else
-                    f"🏆 **週間王者称号を防衛しました！** {defn['name']}"
-                )
                 try:
-                    await notify_ch.send(msg)
+                    await notify_ch.send(embed=embed_battle)
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -1960,41 +1981,142 @@ async def weekly_mid_announcement():
     if not (now.hour == 21 and now.minute == 0):
         return
 
+    global_top10 = get_global_weekly_ranking()[:10]
+    if not global_top10:
+        return
+
+    medals = ["🥇", "🥈", "🥉", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+    desc = ""
+    for rank, (gid_str, uid, xp) in enumerate(global_top10, start=1):
+        g = bot.get_guild(int(gid_str))
+        member = g.get_member(int(uid)) if g else None
+        name = member.display_name if member else f"ID:{uid}"
+        server = g.name if g else "不明"
+        desc += f"{medals[rank - 1]} **{name}** ({server}) - {xp:,} XP\n"
+
+    embed = discord.Embed(
+        title="📊 週間全国ランキング 中間発表",
+        description=desc,
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="最終結果は月曜18:00に発表！")
+
     for guild in bot.guilds:
         gid = guild.id
         if _mid_announced_today.get(gid) == today:
             continue
         _mid_announced_today[gid] = today
 
+        ch_id = get_level_channel_id(gid)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if notify_channel:
+            try:
+                await notify_channel.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+# =========================
+# ランク維持条件 降格注意通知（水曜・土曜・日曜）
+# =========================
+_rank_warning_fired = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def rank_maintenance_warning_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+    today = now.strftime("%Y-%m-%d")
+    weekday = now.weekday()  # 0=Mon ... 2=Wed, 5=Sat, 6=Sun
+
+    if not (now.hour == 21 and now.minute == 0):
+        return
+    if weekday not in (2, 5, 6):
+        return
+    if _rank_warning_fired.get(today):
+        return
+    _rank_warning_fired[today] = True
+
+    relax_conditions = get_weekly_relax_conditions()
+    pool_dict = dict(RANK_MAINTENANCE_POOL)
+
+    global_ranking = get_global_weekly_ranking()
+    top10_gid_uid_set = {(gid_str, uid) for gid_str, uid, _ in global_ranking[:10]}
+
+    if weekday == 2:
+        label = "📅 水曜日"
+        days_left = 5
+        color = discord.Color.yellow()
+    elif weekday == 5:
+        label = "⚠️ 土曜日"
+        days_left = 2
+        color = discord.Color.orange()
+    else:
+        label = "🚨 ラストチャンス（日曜日）"
+        days_left = 1
+        color = discord.Color.red()
+
+    for guild in bot.guilds:
+        gid = guild.id
         data = load_data(gid)
         if not data:
             continue
 
         ch_id = get_level_channel_id(gid)
         notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if not notify_channel:
+            continue
 
-        sorted_users = sorted(
-            [(uid, info) for uid, info in data.items() if uid != LAST_DECAY_KEY],
-            key=lambda x: x[1].get("weekly_xp", 0),
-            reverse=True
-        )
+        at_risk = []
+        for uid, info in data.items():
+            if uid == LAST_DECAY_KEY or not isinstance(info, dict):
+                continue
+            level = info.get("level", 1)
 
-        desc = ""
-        medals = ["🥇", "🥈", "🥉", "④", "⑤"]
-        for i, (uid, info) in enumerate(sorted_users[:5]):
-            desc += f"{medals[i]} <@{uid}> - {info.get('weekly_xp', 0)} XP\n"
+            rule = None
+            for min_lv, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+                if level >= min_lv:
+                    rule = (min_lv, req_xp, penalty, rank_name)
+                    break
+            if rule is None:
+                continue
 
-        if notify_channel:
-            embed = discord.Embed(
-                title="📊 週間ランキング中間発表",
-                description=desc,
-                color=discord.Color.blue()
+            min_lv, req_xp, penalty, rank_name = rule
+            weekly_xp = info.get("weekly_xp", 0)
+            gid_uid = (str(gid), uid)
+            relax_count = sum(
+                1 for cid in relax_conditions
+                if check_relax_condition(cid, info, top10_gid_uid_set, gid_uid)
             )
-            embed.set_footer(text="最終結果は月曜18:00に発表！")
-            try:
-                await notify_channel.send(embed=embed)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+            reduction = int(req_xp * RANK_MAINTENANCE_RELAX_PERCENT * relax_count)
+            threshold = req_xp - reduction
+
+            if weekly_xp >= threshold:
+                continue
+
+            at_risk.append((uid, rank_name, weekly_xp, threshold, penalty))
+
+        if not at_risk:
+            continue
+
+        lines = "\n".join(
+            f"<@{uid}> [{rank}] {xp:,} / {thresh:,} XP（あと **{thresh - xp:,} XP** | 降格: -{pen}Lv）"
+            for uid, rank, xp, thresh, pen in at_risk
+        )
+        relax_text = "\n".join(f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions)
+
+        embed = discord.Embed(
+            title=f"{label} ランク降格注意！",
+            description=(
+                f"月曜リセットまであと **{days_left}日** です！\n\n"
+                f"{lines}\n\n"
+                f"**今週の緩和条件（各 -10% 軽減）**\n{relax_text}"
+            ),
+            color=color
+        )
+        embed.set_footer(text="このまま月曜を迎えるとランクが下がります！")
+        try:
+            await notify_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 # =========================
 # イベントボス read/write
@@ -4053,6 +4175,8 @@ async def on_ready():
         weekly_ranking_task.start()
     if not weekly_mid_announcement.is_running():
         weekly_mid_announcement.start()
+    if not rank_maintenance_warning_task.is_running():
+        rank_maintenance_warning_task.start()
     if not decay_task.is_running():
         decay_task.start()
     if not xp_boost_scheduler.is_running():
