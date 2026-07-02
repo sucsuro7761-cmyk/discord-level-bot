@@ -1090,6 +1090,7 @@ async def rank(interaction: discord.Interaction):
 async def top(interaction: discord.Interaction):
     await interaction.response.defer()
     users = load_data(interaction.guild.id)
+    my_id = str(interaction.user.id)
 
     ranking = sorted(
         [(uid, info) for uid, info in users.items() if uid != LAST_DECAY_KEY],
@@ -1105,7 +1106,17 @@ async def top(interaction: discord.Interaction):
         level = info.get("level", 1)
         xp = info.get("xp", 0)
         icon = medals[i-1] if i <= 3 else f"{i}."
-        text += f"{icon} <@{user_id}> | Lv{level} | {xp}XP\n"
+        line = f"{icon} <@{user_id}> | Lv{level} | {xp:,}XP"
+        text += f"**{line}**\n" if user_id == my_id else f"{line}\n"
+
+    # コマンド使用者が10位圏外なら区切り線＋自分の順位を追加
+    my_rank = next((i + 1 for i, (uid, _) in enumerate(ranking) if uid == my_id), None)
+    if my_rank and my_rank > 10:
+        my_info = users.get(my_id, {})
+        my_level = my_info.get("level", 1)
+        my_xp = my_info.get("xp", 0)
+        text += f"\n･ ･ ･ ･ ･ ･ ･ ･ ･ ･\n"
+        text += f"**{my_rank}.** <@{my_id}> | Lv{my_level} | {my_xp:,}XP"
 
     embed.description = text
     await interaction.followup.send(embed=embed)
@@ -1292,10 +1303,83 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
-# /userdata（管理者用）
+# /globalrank
 # =========================
-@bot.tree.command(name="userdata", description="ユーザーのデータを確認（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="globalrank", description="全国週間XPランキングTOP10と自分の順位を確認")
+async def globalrank(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    ranking = get_global_weekly_ranking()
+    my_guild_id = str(interaction.guild.id)
+    my_user_id  = str(interaction.user.id)
+
+    # 自分のエントリ
+    my_rank = None
+    my_xp   = 0
+    for i, (gid, uid, xp) in enumerate(ranking):
+        if gid == my_guild_id and uid == my_user_id:
+            my_rank = i + 1
+            my_xp   = xp
+            break
+
+    # TOP10 ボーダー XP（10位のXP、参加者が10人未満なら最下位のXP）
+    border_xp = ranking[9][2] if len(ranking) >= 10 else (ranking[-1][2] if ranking else 0)
+    need_xp   = max(0, border_xp - my_xp + 1)
+
+    # リセットまでの残り時間（月曜18:00 JST）
+    now = datetime.now(JST)
+    days_until_monday = (7 - now.weekday()) % 7 or 7
+    reset_dt = (now + timedelta(days=days_until_monday)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    remain_sec = int((reset_dt - now).total_seconds())
+    remain_d   = remain_sec // 86400
+    remain_h   = (remain_sec % 86400) // 3600
+    remain_m   = (remain_sec % 3600) // 60
+
+    medals = ["🥇", "🥈", "🥉"]
+    top10_lines = []
+    for i, (gid, uid, xp) in enumerate(ranking[:10], start=1):
+        guild_obj  = bot.get_guild(int(gid))
+        guild_name = guild_obj.name if guild_obj else f"(ID:{gid})"
+        icon = medals[i - 1] if i <= 3 else f"`{i}.`"
+        line = f"{icon} <@{uid}> `{guild_name}` | **{xp:,} XP**"
+        if gid == my_guild_id and uid == my_user_id:
+            line = f"**{line}** ← あなた"
+        top10_lines.append(line)
+
+    top10_text = "\n".join(top10_lines) if top10_lines else "まだランキングデータがありません。"
+
+    embed = discord.Embed(
+        title="🌐 全国週間XPランキング TOP10",
+        description=top10_text,
+        color=discord.Color.gold()
+    )
+
+    # 自分の順位フィールド
+    if my_rank and my_rank <= 10:
+        my_status = f"🏆 **{my_rank}位** / {len(ranking)}人　（今週 {my_xp:,} XP）\nTOP10入り達成中！"
+    elif my_rank:
+        my_status = (
+            f"**{my_rank}位** / {len(ranking)}人　（今週 {my_xp:,} XP）\n"
+            f"TOP10まであと **{need_xp:,} XP**（10位ボーダー: {border_xp:,} XP）"
+        )
+    else:
+        my_status = "今週はまだ週間XPを獲得していません。"
+
+    embed.add_field(name="📍 あなたの順位", value=my_status, inline=False)
+    embed.add_field(
+        name="⏳ リセットまで",
+        value=f"**{remain_d}日{remain_h}時間{remain_m}分**（月曜 18:00 JST）",
+        inline=False
+    )
+    embed.set_footer(text=f"集計: 全{len(ranking)}人　ボーダーXP: {border_xp:,}")
+    await interaction.followup.send(embed=embed)
+
+# =========================
+# /userdata
+# =========================
+@bot.tree.command(name="userdata", description="ユーザーのデータを確認")
 async def userdata(interaction: discord.Interaction, member: discord.Member):
     data = load_data(interaction.guild.id)
     user_id = str(member.id)
@@ -1340,17 +1424,14 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     embed.add_field(name="今週のボスダメージ", value=f"{boss_dmg} ダメージ")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@userdata.error
-async def userdata_error(interaction: discord.Interaction, error):
-    if isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
-
 # =========================
-# /alldata（管理者用）
+# /alldata（bot管理者専用）
 # =========================
-@bot.tree.command(name="alldata", description="全ユーザーデータをCSVで出力（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="alldata", description="全ユーザーデータをCSVで出力（bot管理者専用）")
 async def alldata(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     data = load_data(interaction.guild.id)
     guild = interaction.guild
@@ -1387,11 +1468,6 @@ async def alldata(interaction: discord.Interaction):
         file=file,
         ephemeral=True
     )
-
-@alldata.error
-async def alldata_error(interaction: discord.Interaction, error):
-    if isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 # =========================
 # 週間ランキング（全サーバー）
@@ -2065,7 +2141,8 @@ async def rank_maintenance_warning_task():
         if not notify_channel:
             continue
 
-        at_risk = []
+        # ランクごとに未達成ユーザーを収集
+        by_rank: dict[str, list] = {rank_name: [] for _, _, _, rank_name in RANK_MAINTENANCE_RULES}
         for uid, info in data.items():
             if uid == LAST_DECAY_KEY or not isinstance(info, dict):
                 continue
@@ -2092,26 +2169,40 @@ async def rank_maintenance_warning_task():
             if weekly_xp >= threshold:
                 continue
 
-            at_risk.append((uid, rank_name, weekly_xp, threshold, penalty))
+            by_rank[rank_name].append((uid, weekly_xp, threshold, penalty))
 
-        if not at_risk:
+        # 全ランクで未達成ゼロならスキップ
+        if not any(by_rank.values()):
             continue
-
-        lines = "\n".join(
-            f"<@{uid}> [{rank}] {xp:,} / {thresh:,} XP（あと **{thresh - xp:,} XP** | 降格: -{pen}Lv）"
-            for uid, rank, xp, thresh, pen in at_risk
-        )
-        relax_text = "\n".join(f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions)
 
         embed = discord.Embed(
             title=f"{label} ランク降格注意！",
-            description=(
-                f"月曜リセットまであと **{days_left}日** です！\n\n"
-                f"{lines}\n\n"
-                f"**今週の緩和条件（各 -10% 軽減）**\n{relax_text}"
-            ),
+            description=f"月曜リセットまであと **{days_left}日** です！",
             color=color
         )
+
+        # 高いランク順にフィールドを追加
+        rank_icons = {
+            "Legend": "💎", "VIP": "👑", "VIP Lite": "⭐",
+            "Premiere": "🔥", "CORE": "🔵", "MEMBER": "🟢", "MEMBER Lite": "⚪",
+        }
+        for _, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+            users = by_rank.get(rank_name, [])
+            if not users:
+                continue
+            icon = rank_icons.get(rank_name, "▸")
+            field_lines = "\n".join(
+                f"<@{uid}> {xp:,} / {thresh:,} XP（あと **{thresh - xp:,} XP** | -{pen}Lv）"
+                for uid, xp, thresh, pen in users
+            )
+            embed.add_field(
+                name=f"{icon} {rank_name}（維持: {req_xp:,} XP）",
+                value=field_lines,
+                inline=False
+            )
+
+        relax_text = "\n".join(f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions)
+        embed.add_field(name="🛡️ 今週の緩和条件（各 -10% 軽減）", value=relax_text, inline=False)
         embed.set_footer(text="このまま月曜を迎えるとランクが下がります！")
         try:
             await notify_channel.send(embed=embed)
@@ -3160,47 +3251,6 @@ async def setupall(interaction: discord.Interaction):
         title="🔧 全サーバーセットアップ完了",
         description=desc,
         color=discord.Color.green()
-    )
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-# =========================
-# /cleanupallroles（旧ロール削除・bot管理者専用）
-# =========================
-@bot.tree.command(name="cleanupallroles", description="全サーバーから旧ランクロール（SELECT・PREMIUM）を削除（bot管理者専用）")
-async def cleanupallroles(interaction: discord.Interaction):
-    if not is_bot_admin(interaction.user.id):
-        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    OLD_ROLES = ["SELECT", "PREMIUM"]
-    results = []
-
-    for guild in bot.guilds:
-        deleted = []
-        for role_name in OLD_ROLES:
-            role = discord.utils.get(guild.roles, name=role_name)
-            if not role:
-                continue
-            try:
-                await role.delete(reason="/cleanupallroles による旧ロール削除")
-                deleted.append(role_name)
-                await asyncio.sleep(0.5)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-        if deleted:
-            results.append(f"**{guild.name}**: {', '.join(deleted)} を削除")
-
-    if results:
-        desc = "\n".join(f"　・{r}" for r in results)
-    else:
-        desc = "削除対象のロールが見つかりませんでした。"
-
-    embed = discord.Embed(
-        title="🗑️ 旧ロール削除完了",
-        description=desc,
-        color=discord.Color.orange()
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 

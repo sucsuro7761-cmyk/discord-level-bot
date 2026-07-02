@@ -269,6 +269,8 @@ RANK_MAINTENANCE_RULES = [
     (50,  3000,  3, "VIP Lite"),
     (30,  1500,  2, "Premiere"),
     (20,  500,   1, "CORE"),
+    (10,  250,   1, "MEMBER"),
+    (2,   100,   1, "MEMBER Lite"),
 ]
 
 RANK_MAINTENANCE_RELAX_PERCENT = 0.10  # 条件1つあたり必要XPの10%を軽減
