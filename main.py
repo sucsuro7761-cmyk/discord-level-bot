@@ -1090,6 +1090,7 @@ async def rank(interaction: discord.Interaction):
 async def top(interaction: discord.Interaction):
     await interaction.response.defer()
     users = load_data(interaction.guild.id)
+    my_id = str(interaction.user.id)
 
     ranking = sorted(
         [(uid, info) for uid, info in users.items() if uid != LAST_DECAY_KEY],
@@ -1105,7 +1106,16 @@ async def top(interaction: discord.Interaction):
         level = info.get("level", 1)
         xp = info.get("xp", 0)
         icon = medals[i-1] if i <= 3 else f"{i}."
-        text += f"{icon} <@{user_id}> | Lv{level} | {xp}XP\n"
+        text += f"{icon} <@{user_id}> | Lv{level} | {xp:,}XP\n"
+
+    # コマンド使用者が10位圏外なら区切り線＋自分の順位を追加
+    my_rank = next((i + 1 for i, (uid, _) in enumerate(ranking) if uid == my_id), None)
+    if my_rank and my_rank > 10:
+        my_info = users.get(my_id, {})
+        my_level = my_info.get("level", 1)
+        my_xp = my_info.get("xp", 0)
+        text += f"\n･ ･ ･ ･ ･ ･ ･ ･ ･ ･\n"
+        text += f"**{my_rank}.** <@{my_id}> | Lv{my_level} | {my_xp:,}XP"
 
     embed.description = text
     await interaction.followup.send(embed=embed)
