@@ -178,8 +178,76 @@ class ShopCog(commands.Cog):
         if item_id == "investment_pack":
             await interaction.response.send_message("📈 投資パックは `/invest` コマンドで購入・使用できます！", ephemeral=True)
             return
+
         if item_id == "royal_pass":
-            await interaction.response.send_message("👑 ROYAL PASSは `/buyroyal` コマンドで購入できます！", ephemeral=True)
+            cleanup_expired_buffs(info)
+            if info.get("buffs", {}).get("royal_pass"):
+                expires_at = info["buffs"]["royal_pass"].get("expires_at", 0)
+                remain     = max(0, int(expires_at - time.time()))
+                d, r       = divmod(remain, 86400)
+                h, _       = divmod(r, 3600)
+                await interaction.response.send_message(
+                    f"👑 ROYAL PASSは既に有効です！\n残り **{d}日{h}時間**",
+                    ephemeral=True
+                )
+                return
+
+            if not spend_coins(data, user_id, item["price"], "buy_royal_pass"):
+                await interaction.response.send_message(
+                    f"コインが足りません。\n必要: **{item['price']:,}コイン** ／ 所持: **{info.get('coins', 0):,}コイン**",
+                    ephemeral=True
+                )
+                return
+
+            add_timed_buff(info, "royal_pass",       True,                   ROYAL_PASS_DURATION, "royal_pass")
+            add_timed_buff(info, "xp_multiplier",    ROYAL_PASS_XP_BONUS,   ROYAL_PASS_DURATION, "royal_pass")
+            add_timed_buff(info, "daily_multiplier", ROYAL_PASS_DAILY_BONUS, ROYAL_PASS_DURATION, "royal_pass")
+
+            role = discord.utils.get(interaction.guild.roles, name=ROYAL_PASS_ROLE)
+            if not role:
+                try:
+                    role = await interaction.guild.create_role(
+                        name=ROYAL_PASS_ROLE,
+                        color=discord.Color.from_rgb(255, 215, 0),
+                        reason="ROYAL PASS購入"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    role = None
+            if role:
+                try:
+                    await interaction.user.add_roles(role)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+            info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + item["price"]
+            info["weekly_shop_purchases"] = info.get("weekly_shop_purchases", 0) + 1
+            shop_log = load_shop_log(interaction.guild.id)
+            week_key = datetime.now(JST).strftime("%Y-W%W")
+            shop_log.setdefault(week_key, {})
+            shop_log[week_key]["royal_pass"] = shop_log[week_key].get("royal_pass", 0) + 1
+            save_shop_log(interaction.guild.id, shop_log)
+            save_data(interaction.guild.id, data)
+
+            embed = discord.Embed(
+                title="👑 ROYAL PASS 購入完了！",
+                description=(
+                    f"{interaction.user.mention} がROYAL PASSを購入しました！\n\n"
+                    f"✨ XP獲得量 **+20%**（7日間）\n"
+                    f"🎁 デイリー報酬 **+50%**（7日間）\n"
+                    f"👑 特別ロール **{ROYAL_PASS_ROLE}** 付与！"
+                ),
+                color=discord.Color.from_rgb(255, 215, 0)
+            )
+            embed.set_footer(text="有効期間：7日間")
+            await interaction.response.send_message(embed=embed)
+
+            ch_id = get_level_channel_id(interaction.guild.id)
+            notify_ch = interaction.guild.get_channel(ch_id) if ch_id else None
+            if notify_ch and notify_ch != interaction.channel:
+                try:
+                    await notify_ch.send(f"👑 **{interaction.user.display_name}** が **ROYAL PASS** を購入しました！")
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             return
 
         if not spend_coins(data, user_id, item["price"], f"buy_{item_id}"):
@@ -623,86 +691,6 @@ class ShopCog(commands.Cog):
             color=color
         )
         await interaction.response.send_message(embed=embed)
-
-    # =========================
-    # /buyroyal
-    # =========================
-    @discord.app_commands.command(name="buyroyal", description="👑 ROYAL PASSを購入する（50,000コイン・7日間）")
-    async def buyroyal(self, interaction: discord.Interaction):
-        guild_id = interaction.guild.id
-        user_id  = str(interaction.user.id)
-        data     = load_data(guild_id)
-        info     = ensure_user_data(data, user_id)
-        price    = SHOP_ITEMS["royal_pass"]["price"]
-
-        cleanup_expired_buffs(info)
-        if info.get("buffs", {}).get("royal_pass"):
-            expires_at = info["buffs"]["royal_pass"].get("expires_at", 0)
-            remain     = max(0, int(expires_at - time.time()))
-            d, r       = divmod(remain, 86400)
-            h, _       = divmod(r, 3600)
-            await interaction.response.send_message(
-                f"👑 ROYAL PASSは既に有効です！\n残り **{d}日{h}時間**",
-                ephemeral=True
-            )
-            return
-
-        if not spend_coins(data, user_id, price, "buy_royal_pass"):
-            await interaction.response.send_message(
-                f"コインが足りません。\n必要: **{price:,}コイン** ／ 所持: **{info.get('coins', 0):,}コイン**",
-                ephemeral=True
-            )
-            return
-
-        add_timed_buff(info, "royal_pass",       True,                   ROYAL_PASS_DURATION, "royal_pass")
-        add_timed_buff(info, "xp_multiplier",    ROYAL_PASS_XP_BONUS,   ROYAL_PASS_DURATION, "royal_pass")
-        add_timed_buff(info, "daily_multiplier", ROYAL_PASS_DAILY_BONUS, ROYAL_PASS_DURATION, "royal_pass")
-
-        role = discord.utils.get(interaction.guild.roles, name=ROYAL_PASS_ROLE)
-        if not role:
-            try:
-                role = await interaction.guild.create_role(
-                    name=ROYAL_PASS_ROLE,
-                    color=discord.Color.from_rgb(255, 215, 0),
-                    reason="ROYAL PASS購入"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                role = None
-        if role:
-            try:
-                await interaction.user.add_roles(role)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-        info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + price
-        info["weekly_shop_purchases"] = info.get("weekly_shop_purchases", 0) + 1
-        shop_log = load_shop_log(guild_id)
-        week_key = datetime.now(JST).strftime("%Y-W%W")
-        shop_log.setdefault(week_key, {})
-        shop_log[week_key]["royal_pass"] = shop_log[week_key].get("royal_pass", 0) + 1
-        save_shop_log(guild_id, shop_log)
-        save_data(guild_id, data)
-
-        embed = discord.Embed(
-            title="👑 ROYAL PASS 購入完了！",
-            description=(
-                f"{interaction.user.mention} がROYAL PASSを購入しました！\n\n"
-                f"✨ XP獲得量 **+20%**（7日間）\n"
-                f"🎁 デイリー報酬 **+50%**（7日間）\n"
-                f"👑 特別ロール **{ROYAL_PASS_ROLE}** 付与！"
-            ),
-            color=discord.Color.from_rgb(255, 215, 0)
-        )
-        embed.set_footer(text="有効期間：7日間")
-        await interaction.response.send_message(embed=embed)
-
-        ch_id = get_level_channel_id(guild_id)
-        notify_ch = interaction.guild.get_channel(ch_id) if ch_id else None
-        if notify_ch and notify_ch != interaction.channel:
-            try:
-                await notify_ch.send(f"👑 **{interaction.user.display_name}** が **ROYAL PASS** を購入しました！")
-            except (discord.Forbidden, discord.HTTPException):
-                pass
 
     # =========================
     # /shopstats

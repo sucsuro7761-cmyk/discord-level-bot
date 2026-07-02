@@ -1303,10 +1303,9 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
-# /userdata（管理者用）
+# /userdata
 # =========================
-@bot.tree.command(name="userdata", description="ユーザーのデータを確認（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="userdata", description="ユーザーのデータを確認")
 async def userdata(interaction: discord.Interaction, member: discord.Member):
     data = load_data(interaction.guild.id)
     user_id = str(member.id)
@@ -1351,17 +1350,14 @@ async def userdata(interaction: discord.Interaction, member: discord.Member):
     embed.add_field(name="今週のボスダメージ", value=f"{boss_dmg} ダメージ")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@userdata.error
-async def userdata_error(interaction: discord.Interaction, error):
-    if isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
-
 # =========================
-# /alldata（管理者用）
+# /alldata（bot管理者専用）
 # =========================
-@bot.tree.command(name="alldata", description="全ユーザーデータをCSVで出力（管理者用）")
-@discord.app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="alldata", description="全ユーザーデータをCSVで出力（bot管理者専用）")
 async def alldata(interaction: discord.Interaction):
+    if not is_bot_admin(interaction.user.id):
+        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     data = load_data(interaction.guild.id)
     guild = interaction.guild
@@ -1398,11 +1394,6 @@ async def alldata(interaction: discord.Interaction):
         file=file,
         ephemeral=True
     )
-
-@alldata.error
-async def alldata_error(interaction: discord.Interaction, error):
-    if isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message("このコマンドは管理者のみ使用できます！", ephemeral=True)
 
 # =========================
 # 週間ランキング（全サーバー）
@@ -3186,47 +3177,6 @@ async def setupall(interaction: discord.Interaction):
         title="🔧 全サーバーセットアップ完了",
         description=desc,
         color=discord.Color.green()
-    )
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-# =========================
-# /cleanupallroles（旧ロール削除・bot管理者専用）
-# =========================
-@bot.tree.command(name="cleanupallroles", description="全サーバーから旧ランクロール（SELECT・PREMIUM）を削除（bot管理者専用）")
-async def cleanupallroles(interaction: discord.Interaction):
-    if not is_bot_admin(interaction.user.id):
-        await interaction.response.send_message("❌ このコマンドはBot管理者のみ使用できます！", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    OLD_ROLES = ["SELECT", "PREMIUM"]
-    results = []
-
-    for guild in bot.guilds:
-        deleted = []
-        for role_name in OLD_ROLES:
-            role = discord.utils.get(guild.roles, name=role_name)
-            if not role:
-                continue
-            try:
-                await role.delete(reason="/cleanupallroles による旧ロール削除")
-                deleted.append(role_name)
-                await asyncio.sleep(0.5)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-        if deleted:
-            results.append(f"**{guild.name}**: {', '.join(deleted)} を削除")
-
-    if results:
-        desc = "\n".join(f"　・{r}" for r in results)
-    else:
-        desc = "削除対象のロールが見つかりませんでした。"
-
-    embed = discord.Embed(
-        title="🗑️ 旧ロール削除完了",
-        description=desc,
-        color=discord.Color.orange()
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
