@@ -1106,7 +1106,8 @@ async def top(interaction: discord.Interaction):
         level = info.get("level", 1)
         xp = info.get("xp", 0)
         icon = medals[i-1] if i <= 3 else f"{i}."
-        text += f"{icon} <@{user_id}> | Lv{level} | {xp:,}XP\n"
+        line = f"{icon} <@{user_id}> | Lv{level} | {xp:,}XP"
+        text += f"**{line}**\n" if user_id == my_id else f"{line}\n"
 
     # コマンド使用者が10位圏外なら区切り線＋自分の順位を追加
     my_rank = next((i + 1 for i, (uid, _) in enumerate(ranking) if uid == my_id), None)
