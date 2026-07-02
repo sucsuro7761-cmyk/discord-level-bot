@@ -27,7 +27,8 @@ from utils.data import (
 # 投資パック定数
 # =========================
 INVEST_TABLE = [
-    (0.5, 0.40, "大暴落…",        "📉"),
+    (0.0, 0.05, "跡形もなく…",    "💀"),
+    (0.5, 0.35, "大暴落…",        "📉"),
     (1.0, 0.35, "元本割れなし",   "📊"),
     (1.5, 0.20, "安定した利益！", "📊"),
     (3.0, 0.05, "爆益！！",       "📈"),
@@ -85,6 +86,20 @@ async def notify_buff_end(guild, user_name: str, item_name: str, duration_second
     notify_ch = guild.get_channel(ch_id) if ch_id else None
     if notify_ch:
         await notify_ch.send(f"⏱ **{user_name}** の **{item_name}** の効果が終了しました。")
+
+
+async def notify_invest_ready(guild, member: discord.Member, amount: int):
+    await asyncio.sleep(INVEST_DURATION)
+    ch_id = get_level_channel_id(guild.id)
+    notify_ch = guild.get_channel(ch_id) if ch_id else None
+    if notify_ch:
+        try:
+            await notify_ch.send(
+                f"📈 {member.mention} さんの投資（**{amount:,}コイン**）が回収できます！\n"
+                f"`/claiminvest` で結果を確認してください 🎲"
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
 
 class ShopCog(commands.Cog):
@@ -599,8 +614,12 @@ class ShopCog(commands.Cog):
             ),
             color=discord.Color.blue()
         )
-        embed.set_footer(text=f"投資額：{amount:,}コイン ／ 期待値：約×1.025")
+        embed.set_footer(text=f"投資額：{amount:,}コイン ／ 回収可能になったら通知します")
         await interaction.response.send_message(embed=embed)
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if member:
+            asyncio.create_task(notify_invest_ready(interaction.guild, member, amount))
 
     # =========================
     # /investstatus
@@ -677,8 +696,10 @@ class ShopCog(commands.Cog):
             color = discord.Color.green()
         elif multiplier == 1.0:
             color = discord.Color.blue()
-        else:
+        elif multiplier > 0.0:
             color = discord.Color.red()
+        else:
+            color = discord.Color.from_rgb(30, 30, 30)
 
         profit_text = f"+{profit:,}" if profit >= 0 else f"{profit:,}"
         embed = discord.Embed(
