@@ -37,7 +37,7 @@ from utils.config import (
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
     get_earned_titles, add_earned_title, get_active_title, set_active_title,
-    resolve_display_title,
+    resolve_display_title, increment_champion_wins, get_display_title_with_stars,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -1630,20 +1630,26 @@ async def weekly_ranking_task():
     )
     if server_results and server_results[0][1] > 0:
         champion_guild = server_results[0][0]
-        is_new = add_earned_title(champion_guild.id, "weekly_champion")
         defn = TITLE_DEFINITIONS["weekly_champion"]
-        champion_label = (
-            f"🏆 **週間王者称号獲得！** {defn['name']}"
-            if is_new else
-            f"🏆 **週間王者称号を防衛！** {defn['name']}"
-        )
+        wins = increment_champion_wins(champion_guild.id)
+        champ_tiers = defn["tiers"]
+        new_stars = max((t["stars"] for t in champ_tiers if wins >= t["threshold"]), default=0)
+        is_new, old_stars, curr_stars = add_earned_title(champion_guild.id, "weekly_champion", new_stars) if new_stars else (False, 0, 0)
+        star_badge = f" {'☆' * curr_stars}" if curr_stars > 0 else ""
+        if is_new:
+            champion_label = f"🏆 **週間王者称号獲得！** {defn['name']}{star_badge}（{wins}回目の優勝）"
+        elif curr_stars > old_stars:
+            champion_label = f"🏆 **週間王者称号が昇格！** {defn['name']}{star_badge}（{wins}回目の優勝）"
+        else:
+            champion_label = f"🏆 **週間王者称号を防衛！** {defn['name']}{star_badge}（通算{wins}回）"
 
         medals = ["🥇", "🥈", "🥉"]
         desc = ""
         for i, (g, total_xp, active) in enumerate(server_results, start=1):
             medal = medals[i - 1] if i <= 3 else f"`{i}.`"
             crown = " 👑" if i == 1 else ""
-            t_disp = title_display(resolve_display_title(g.id))
+            tid, stars = get_display_title_with_stars(g.id)
+            t_disp = title_display(tid, stars)
             desc += f"{medal} **{g.name}**{t_disp}{crown}\n　総XP：**{total_xp:,}** ／ 参加{active}人\n"
 
         embed_battle = discord.Embed(
@@ -1778,21 +1784,27 @@ async def weekly_ranking_task():
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        # 週間コイン獲得合計チェック → rich_community 称号
-        rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
+        # 週間コイン獲得合計チェック → rich_community 称号（☆システム）
         total_weekly_coins = sum(
             info.get("weekly_coins_earned", 0)
             for uid, info in data.items()
             if uid != LAST_DECAY_KEY and isinstance(info, dict)
         )
-        if total_weekly_coins >= rich_threshold:
-            is_new = add_earned_title(gid, "rich_community")
-            if is_new and notify_channel:
-                defn = TITLE_DEFINITIONS["rich_community"]
+        rich_defn = TITLE_DEFINITIONS["rich_community"]
+        rich_new_stars = max(
+            (t["stars"] for t in rich_defn["tiers"] if total_weekly_coins >= t["threshold"]),
+            default=0
+        )
+        if rich_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "rich_community", rich_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in rich_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
                 try:
                     await notify_channel.send(
-                        f"💰 **新しい称号を獲得しました！**\n"
-                        f"**{defn['name']}** — {defn['description']}\n"
+                        f"💰 **{title_text}**\n"
+                        f"**{rich_defn['name']} {star_badge}** — {tier_desc}\n"
                         f"`/settitle` で表示する称号を設定できます！"
                     )
                 except (discord.Forbidden, discord.HTTPException):
@@ -2543,22 +2555,30 @@ async def handle_boss_clear(guild, boss):
     # イベントボストリガーチェック
     await check_event_boss_trigger(guild, boss.get("cleared", 0))
 
-    # 称号チェック（ボス討伐系）
+    # 称号チェック（ボス討伐系・☆システム）
     cleared_total = boss.get("cleared", 0)
     for title_id, defn in TITLE_DEFINITIONS.items():
         if defn.get("trigger") != "boss_defeat":
             continue
-        if cleared_total >= defn.get("threshold", 1):
-            is_new = add_earned_title(gid, title_id)
-            if is_new and notify_channel:
-                try:
-                    await notify_channel.send(
-                        f"🏅 **新しい称号を獲得しました！**\n"
-                        f"**{defn['name']}** — {defn['description']}\n"
-                        f"`/settitle` で表示する称号を設定できます！"
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+        new_stars = max(
+            (t["stars"] for t in defn["tiers"] if t["threshold"] and cleared_total >= t["threshold"]),
+            default=0
+        )
+        if new_stars == 0:
+            continue
+        is_new, old_stars, curr_stars = add_earned_title(gid, title_id, new_stars)
+        if (is_new or curr_stars > old_stars) and notify_channel:
+            tier_desc = next(t["description"] for t in defn["tiers"] if t["stars"] == curr_stars)
+            star_badge = "☆" * curr_stars
+            title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+            try:
+                await notify_channel.send(
+                    f"🏅 **{title_text}**\n"
+                    f"**{defn['name']} {star_badge}** — {tier_desc}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 # =========================
 # 週ボス：討伐ブースト
@@ -3458,7 +3478,7 @@ async def on_guild_join(guild):
     await setup_notification_panel_channel(guild)
 
     # 導入記念称号を付与し、称号表示をランダムモードに初期設定
-    add_earned_title(guild.id, "newcomer")
+    add_earned_title(guild.id, "newcomer", 1)
     set_active_title(guild.id, "random")
 
     # ===== bot説明チャンネルを作成 =====
@@ -3767,7 +3787,8 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
             diff      = prev_xp - total_xp
             diff_text = f"次の順位まで **{diff:,} XP**！"
 
-        t_disp = title_display(resolve_display_title(guild.id))
+        tid, stars = get_display_title_with_stars(guild.id)
+        t_disp = title_display(tid, stars)
         desc += f"{medal} **{guild.name}**{t_disp}\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:
