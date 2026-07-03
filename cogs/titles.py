@@ -49,7 +49,8 @@ class TitlesCog(commands.Cog):
             defn = TITLE_DEFINITIONS.get(tid)
             if not defn:
                 continue
-            star_badge = "☆" * stars if stars > 0 else ""
+            has_multiple_tiers = len(defn.get("tiers", [])) > 1
+            star_badge = ("☆" * stars) if (stars > 0 and has_multiple_tiers) else ""
             tier_desc = next(
                 (t["description"] for t in defn.get("tiers", []) if t["stars"] == stars),
                 ""
@@ -131,9 +132,11 @@ class TitlesCog(commands.Cog):
             return
 
         stars = earned.get(title_id, 0)
+        has_multiple_tiers = len(defn.get("tiers", [])) > 1
+        star_badge = ("☆" * stars) if (stars > 0 and has_multiple_tiers) else ""
         set_active_title(guild_id, title_id)
         await interaction.response.send_message(
-            f"✅ 称号を **{defn['name']} {'☆' * stars}** に設定しました！\nサーバー対抗ランキングに表示されます。",
+            f"✅ 称号を **{defn['name']}{(' ' + star_badge) if star_badge else ''}** に設定しました！\nサーバー対抗ランキングに表示されます。",
             ephemeral=True
         )
 
@@ -144,7 +147,10 @@ class TitlesCog(commands.Cog):
         earned = get_earned_titles(interaction.guild.id)
         choices = [
             discord.app_commands.Choice(
-                name=f"{TITLE_DEFINITIONS[tid]['name']} {'☆' * stars}",
+                name=(
+                    f"{TITLE_DEFINITIONS[tid]['name']}"
+                    + (f" {'☆' * stars}" if stars > 0 and len(TITLE_DEFINITIONS[tid].get('tiers', [])) > 1 else "")
+                ),
                 value=tid
             )
             for tid, stars in earned.items()

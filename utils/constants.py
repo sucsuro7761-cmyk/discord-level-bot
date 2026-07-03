@@ -256,11 +256,13 @@ def _stars_str(stars: int) -> str:
 
 # 称号表示用（サーバー名の後ろに付ける）
 def title_display(title_id: str | None, stars: int = 0) -> str:
-    """アクティブ称号がある場合に「【称号名 ☆N】」を返す"""
+    """アクティブ称号がある場合に「【称号名 ☆N】」を返す。tiers が1段階のみの称号は星なし。"""
     if not title_id or title_id not in TITLE_DEFINITIONS:
         return ""
-    name = TITLE_DEFINITIONS[title_id]["name"]
-    star_suffix = f" {_stars_str(stars)}" if stars > 0 else ""
+    defn = TITLE_DEFINITIONS[title_id]
+    name = defn["name"]
+    has_multiple_tiers = len(defn.get("tiers", [])) > 1
+    star_suffix = f" {_stars_str(stars)}" if (stars > 0 and has_multiple_tiers) else ""
     return f"【{name}{star_suffix}】"
 
 # =========================
