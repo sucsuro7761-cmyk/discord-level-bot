@@ -211,40 +211,59 @@ weekly_roles = {
 TITLE_DEFINITIONS: dict[str, dict] = {
     "newcomer": {
         "name": "🌱 新参者",
-        "description": "むれちゃんbotを導入した",
         "trigger": "on_join",
+        "tiers": [
+            {"stars": 1, "threshold": None, "description": "むれちゃんbotを導入した"},
+        ],
     },
     "weekly_champion": {
         "name": "👑 週間王者サーバー",
-        "description": "サーバー対抗週間XPランキングで1位を獲得",
         "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 1,  "description": "サーバー対抗戦で1回優勝した"},
+            {"stars": 2, "threshold": 3,  "description": "サーバー対抗戦で3回優勝した"},
+            {"stars": 3, "threshold": 7,  "description": "サーバー対抗戦で7回優勝した"},
+            {"stars": 4, "threshold": 15, "description": "サーバー対抗戦で15回優勝した"},
+            {"stars": 5, "threshold": 30, "description": "サーバー対抗戦で30回優勝した"},
+        ],
     },
     "boss_hunter": {
-        "name": "⚔️ ボスハンター",
-        "description": "サーバーで初めてボスを討伐した",
+        "name": "⚔️ 討伐者",
         "trigger": "boss_defeat",
-        "threshold": 1,
-    },
-    "boss_master": {
-        "name": "💀 ボスマスター",
-        "description": "ボスを通算10回討伐した",
-        "trigger": "boss_defeat",
-        "threshold": 10,
+        "tiers": [
+            {"stars": 1, "threshold": 1,   "description": "ボスを初めて討伐した"},
+            {"stars": 2, "threshold": 10,  "description": "ボスを10回討伐した"},
+            {"stars": 3, "threshold": 30,  "description": "ボスを30回討伐した"},
+            {"stars": 4, "threshold": 50,  "description": "ボスを50回討伐した"},
+            {"stars": 5, "threshold": 100, "description": "ボスを100回討伐した"},
+        ],
     },
     "rich_community": {
         "name": "💰 リッチコミュニティ",
-        "description": "週間コイン獲得が合計50,000コイン以上",
         "trigger": "weekly_reset",
-        "threshold": 50000,
+        "tiers": [
+            {"stars": 1, "threshold": 50000,  "description": "週間コイン獲得が合計50,000コイン以上"},
+            {"stars": 2, "threshold": 80000,  "description": "週間コイン獲得が合計80,000コイン以上"},
+            {"stars": 3, "threshold": 100000, "description": "週間コイン獲得が合計100,000コイン以上"},
+            {"stars": 4, "threshold": 200000, "description": "週間コイン獲得が合計200,000コイン以上"},
+            {"stars": 5, "threshold": 500000, "description": "週間コイン獲得が合計500,000コイン以上"},
+        ],
     },
 }
 
+def _stars_str(stars: int) -> str:
+    return "☆" * stars
+
 # 称号表示用（サーバー名の後ろに付ける）
-def title_display(title_id: str | None) -> str:
-    """アクティブ称号がある場合に「【称号名】」を返す"""
+def title_display(title_id: str | None, stars: int = 0) -> str:
+    """アクティブ称号がある場合に「【称号名 ☆N】」を返す。tiers が1段階のみの称号は星なし。"""
     if not title_id or title_id not in TITLE_DEFINITIONS:
         return ""
-    return f"【{TITLE_DEFINITIONS[title_id]['name']}】"
+    defn = TITLE_DEFINITIONS[title_id]
+    name = defn["name"]
+    has_multiple_tiers = len(defn.get("tiers", [])) > 1
+    star_suffix = f" {_stars_str(stars)}" if (stars > 0 and has_multiple_tiers) else ""
+    return f"【{name}{star_suffix}】"
 
 # =========================
 # デイリーミッション定義

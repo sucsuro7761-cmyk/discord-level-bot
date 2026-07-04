@@ -5,6 +5,7 @@ from utils.config import (
     add_earned_title,
     get_active_title,
     get_earned_titles,
+    get_display_title_with_stars,
     resolve_display_title,
     set_active_title,
 )
@@ -44,15 +45,21 @@ class TitlesCog(commands.Cog):
         today_title = resolve_display_title(guild_id) if active == "random" else active
 
         lines = []
-        for tid in earned:
+        for tid, stars in earned.items():
             defn = TITLE_DEFINITIONS.get(tid)
             if not defn:
                 continue
+            has_multiple_tiers = len(defn.get("tiers", [])) > 1
+            star_badge = ("☆" * stars) if (stars > 0 and has_multiple_tiers) else ""
+            tier_desc = next(
+                (t["description"] for t in defn.get("tiers", []) if t["stars"] == stars),
+                ""
+            )
             if active == "random":
-                star = "🎲 **（ランダム中）**" if tid == today_title else ""
+                marker = "🎲 **（ランダム中）**" if tid == today_title else ""
             else:
-                star = "✅ **（表示中）**" if tid == active else ""
-            lines.append(f"{defn['name']} {star}\n　└ {defn['description']}")
+                marker = "✅ **（表示中）**" if tid == active else ""
+            lines.append(f"{defn['name']} {star_badge} {marker}\n　└ {tier_desc}")
 
         embed = discord.Embed(
             title=f"🏅 {interaction.guild.name} の称号コレクション",
@@ -61,9 +68,10 @@ class TitlesCog(commands.Cog):
         )
         if active == "random":
             today_defn = TITLE_DEFINITIONS.get(today_title, {})
-            embed.set_footer(text=f"🎲 ランダムモード中 — 今日は「{today_defn.get('name', '?')}」を表示中")
+            today_stars = earned.get(today_title, 0)
+            embed.set_footer(text=f"🎲 ランダムモード中 — 今日は「{today_defn.get('name', '?')} {'☆' * today_stars}」を表示中")
         elif active:
-            embed.set_footer(text=f"現在表示中の称号：{title_display(active)}")
+            embed.set_footer(text=f"現在表示中の称号：{title_display(active, earned.get(active, 0))}")
         else:
             embed.set_footer(text="称号未設定 — /settitle で設定できます")
 
@@ -109,8 +117,8 @@ class TitlesCog(commands.Cog):
         earned = get_earned_titles(guild_id)
         if title_id not in earned:
             earned_names = "\n".join(
-                f"`{tid}` — {TITLE_DEFINITIONS[tid]['name']}"
-                for tid in earned if tid in TITLE_DEFINITIONS
+                f"`{tid}` — {TITLE_DEFINITIONS[tid]['name']} {'☆' * stars}"
+                for tid, stars in earned.items() if tid in TITLE_DEFINITIONS
             ) or "（なし）"
             await interaction.response.send_message(
                 f"❌ その称号はまだ獲得していません。\n\n**獲得済み称号**\n{earned_names}",
@@ -123,9 +131,12 @@ class TitlesCog(commands.Cog):
             await interaction.response.send_message("❌ 不明な称号IDです。", ephemeral=True)
             return
 
+        stars = earned.get(title_id, 0)
+        has_multiple_tiers = len(defn.get("tiers", [])) > 1
+        star_badge = ("☆" * stars) if (stars > 0 and has_multiple_tiers) else ""
         set_active_title(guild_id, title_id)
         await interaction.response.send_message(
-            f"✅ 称号を **{defn['name']}** に設定しました！\nサーバー対抗ランキングに表示されます。",
+            f"✅ 称号を **{defn['name']}{(' ' + star_badge) if star_badge else ''}** に設定しました！\nサーバー対抗ランキングに表示されます。",
             ephemeral=True
         )
 
@@ -136,10 +147,13 @@ class TitlesCog(commands.Cog):
         earned = get_earned_titles(interaction.guild.id)
         choices = [
             discord.app_commands.Choice(
-                name=TITLE_DEFINITIONS[tid]["name"],
+                name=(
+                    f"{TITLE_DEFINITIONS[tid]['name']}"
+                    + (f" {'☆' * stars}" if stars > 0 and len(TITLE_DEFINITIONS[tid].get('tiers', [])) > 1 else "")
+                ),
                 value=tid
             )
-            for tid in earned
+            for tid, stars in earned.items()
             if tid in TITLE_DEFINITIONS and current.lower() in tid.lower()
         ]
         if "random".startswith(current.lower()) or "ランダム".startswith(current):

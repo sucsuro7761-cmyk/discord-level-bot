@@ -37,7 +37,7 @@ from utils.config import (
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
     get_earned_titles, add_earned_title, get_active_title, set_active_title,
-    resolve_display_title,
+    resolve_display_title, increment_champion_wins, get_display_title_with_stars,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -1303,6 +1303,106 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /rankcheck
+# =========================
+@bot.tree.command(name="rankcheck", description="自分のランク維持状況を確認（降格リスクチェック）")
+async def rankcheck(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data     = load_data(guild_id)
+    info     = ensure_user_data(data, user_id)
+
+    level      = info.get("level", 1)
+    weekly_xp  = info.get("weekly_xp", 0)
+
+    # 自分に適用されるルールを検索
+    rule = None
+    for min_lv, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+        if level >= min_lv:
+            rule = (min_lv, req_xp, penalty, rank_name)
+            break
+
+    if rule is None:
+        await interaction.followup.send(
+            "ランク維持条件の対象外です（MEMBER Lite未満）。\nどんどんメッセージを送ってレベルアップしよう！",
+            ephemeral=True
+        )
+        return
+
+    min_lv, req_xp, penalty, rank_name = rule
+
+    # 緩和条件チェック
+    relax_conditions = get_weekly_relax_conditions()
+    global_ranking   = get_global_weekly_ranking()
+    top10_set        = {(gid_str, uid) for gid_str, uid, _ in global_ranking[:10]}
+    gid_uid          = (str(guild_id), user_id)
+    pool_dict        = dict(RANK_MAINTENANCE_POOL)
+
+    relax_met  = sum(1 for cid in relax_conditions if check_relax_condition(cid, info, top10_set, gid_uid))
+    reduction  = int(req_xp * RANK_MAINTENANCE_RELAX_PERCENT * relax_met)
+    threshold  = req_xp - reduction
+    need_xp    = max(0, threshold - weekly_xp)
+
+    # リセットまでの残り時間
+    now = datetime.now(JST)
+    days_until_monday = (7 - now.weekday()) % 7 or 7
+    reset_dt   = (now + timedelta(days=days_until_monday)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    remain_sec = int((reset_dt - now).total_seconds())
+    remain_d   = remain_sec // 86400
+    remain_h   = (remain_sec % 86400) // 3600
+    remain_m   = (remain_sec % 3600) // 60
+
+    rank_icons = {
+        "Legend": "💎", "VIP": "👑", "VIP Lite": "⭐",
+        "Premiere": "🔥", "CORE": "🔵", "MEMBER": "🟢", "MEMBER Lite": "⚪",
+    }
+    icon = rank_icons.get(rank_name, "▸")
+
+    if need_xp == 0:
+        status_line = f"✅ **維持条件達成！** このまま月曜を迎えれば安全です。"
+        color = discord.Color.green()
+    else:
+        status_line = f"⚠️ あと **{need_xp:,} XP** 必要です！"
+        color = discord.Color.orange() if remain_d >= 2 else discord.Color.red()
+
+    # 緩和条件の達成状況
+    relax_lines = "\n".join(
+        f"{'✅' if check_relax_condition(cid, info, top10_set, gid_uid) else '⬜'} {pool_dict.get(cid, cid)}"
+        for cid in relax_conditions
+    )
+
+    embed = discord.Embed(
+        title=f"{icon} {rank_name} ランク維持チェック",
+        description=status_line,
+        color=color
+    )
+    embed.add_field(
+        name="📊 週間XP",
+        value=f"**{weekly_xp:,}** / 必要 **{threshold:,}** XP\n（基準 {req_xp:,} − 緩和 {reduction:,}）",
+        inline=False
+    )
+    embed.add_field(
+        name=f"🛡️ 今週の緩和条件（{relax_met}/{len(relax_conditions)} 達成）",
+        value=relax_lines or "（なし）",
+        inline=False
+    )
+    embed.add_field(
+        name="⏳ リセットまで",
+        value=f"**{remain_d}日{remain_h}時間{remain_m}分**（月曜 18:00 JST）",
+        inline=True
+    )
+    embed.add_field(
+        name="⚠️ 未達成時のペナルティ",
+        value=f"レベル **-{penalty}** 降格",
+        inline=True
+    )
+    embed.set_footer(text=f"Lv{level} / {rank_name}")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# =========================
 # /globalrank
 # =========================
 @bot.tree.command(name="globalrank", description="全国週間XPランキングTOP10と自分の順位を確認")
@@ -1630,20 +1730,26 @@ async def weekly_ranking_task():
     )
     if server_results and server_results[0][1] > 0:
         champion_guild = server_results[0][0]
-        is_new = add_earned_title(champion_guild.id, "weekly_champion")
         defn = TITLE_DEFINITIONS["weekly_champion"]
-        champion_label = (
-            f"🏆 **週間王者称号獲得！** {defn['name']}"
-            if is_new else
-            f"🏆 **週間王者称号を防衛！** {defn['name']}"
-        )
+        wins = increment_champion_wins(champion_guild.id)
+        champ_tiers = defn["tiers"]
+        new_stars = max((t["stars"] for t in champ_tiers if wins >= t["threshold"]), default=0)
+        is_new, old_stars, curr_stars = add_earned_title(champion_guild.id, "weekly_champion", new_stars) if new_stars else (False, 0, 0)
+        star_badge = f" {'☆' * curr_stars}" if curr_stars > 0 else ""
+        if is_new:
+            champion_label = f"🏆 **週間王者称号獲得！** {defn['name']}{star_badge}（{wins}回目の優勝）"
+        elif curr_stars > old_stars:
+            champion_label = f"🏆 **週間王者称号が昇格！** {defn['name']}{star_badge}（{wins}回目の優勝）"
+        else:
+            champion_label = f"🏆 **週間王者称号を防衛！** {defn['name']}{star_badge}（通算{wins}回）"
 
         medals = ["🥇", "🥈", "🥉"]
         desc = ""
         for i, (g, total_xp, active) in enumerate(server_results, start=1):
             medal = medals[i - 1] if i <= 3 else f"`{i}.`"
             crown = " 👑" if i == 1 else ""
-            t_disp = title_display(resolve_display_title(g.id))
+            tid, stars = get_display_title_with_stars(g.id)
+            t_disp = title_display(tid, stars)
             desc += f"{medal} **{g.name}**{t_disp}{crown}\n　総XP：**{total_xp:,}** ／ 参加{active}人\n"
 
         embed_battle = discord.Embed(
@@ -1778,21 +1884,27 @@ async def weekly_ranking_task():
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        # 週間コイン獲得合計チェック → rich_community 称号
-        rich_threshold = TITLE_DEFINITIONS["rich_community"].get("threshold", 50000)
+        # 週間コイン獲得合計チェック → rich_community 称号（☆システム）
         total_weekly_coins = sum(
             info.get("weekly_coins_earned", 0)
             for uid, info in data.items()
             if uid != LAST_DECAY_KEY and isinstance(info, dict)
         )
-        if total_weekly_coins >= rich_threshold:
-            is_new = add_earned_title(gid, "rich_community")
-            if is_new and notify_channel:
-                defn = TITLE_DEFINITIONS["rich_community"]
+        rich_defn = TITLE_DEFINITIONS["rich_community"]
+        rich_new_stars = max(
+            (t["stars"] for t in rich_defn["tiers"] if total_weekly_coins >= t["threshold"]),
+            default=0
+        )
+        if rich_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "rich_community", rich_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in rich_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
                 try:
                     await notify_channel.send(
-                        f"💰 **新しい称号を獲得しました！**\n"
-                        f"**{defn['name']}** — {defn['description']}\n"
+                        f"💰 **{title_text}**\n"
+                        f"**{rich_defn['name']} {star_badge}** — {tier_desc}\n"
                         f"`/settitle` で表示する称号を設定できます！"
                     )
                 except (discord.Forbidden, discord.HTTPException):
@@ -2543,22 +2655,30 @@ async def handle_boss_clear(guild, boss):
     # イベントボストリガーチェック
     await check_event_boss_trigger(guild, boss.get("cleared", 0))
 
-    # 称号チェック（ボス討伐系）
+    # 称号チェック（ボス討伐系・☆システム）
     cleared_total = boss.get("cleared", 0)
     for title_id, defn in TITLE_DEFINITIONS.items():
         if defn.get("trigger") != "boss_defeat":
             continue
-        if cleared_total >= defn.get("threshold", 1):
-            is_new = add_earned_title(gid, title_id)
-            if is_new and notify_channel:
-                try:
-                    await notify_channel.send(
-                        f"🏅 **新しい称号を獲得しました！**\n"
-                        f"**{defn['name']}** — {defn['description']}\n"
-                        f"`/settitle` で表示する称号を設定できます！"
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+        new_stars = max(
+            (t["stars"] for t in defn["tiers"] if t["threshold"] and cleared_total >= t["threshold"]),
+            default=0
+        )
+        if new_stars == 0:
+            continue
+        is_new, old_stars, curr_stars = add_earned_title(gid, title_id, new_stars)
+        if (is_new or curr_stars > old_stars) and notify_channel:
+            tier_desc = next(t["description"] for t in defn["tiers"] if t["stars"] == curr_stars)
+            star_badge = "☆" * curr_stars
+            title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+            try:
+                await notify_channel.send(
+                    f"🏅 **{title_text}**\n"
+                    f"**{defn['name']} {star_badge}** — {tier_desc}\n"
+                    f"`/settitle` で表示する称号を設定できます！"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 # =========================
 # 週ボス：討伐ブースト
@@ -3458,7 +3578,7 @@ async def on_guild_join(guild):
     await setup_notification_panel_channel(guild)
 
     # 導入記念称号を付与し、称号表示をランダムモードに初期設定
-    add_earned_title(guild.id, "newcomer")
+    add_earned_title(guild.id, "newcomer", 1)
     set_active_title(guild.id, "random")
 
     # ===== bot説明チャンネルを作成 =====
@@ -3767,7 +3887,8 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
             diff      = prev_xp - total_xp
             diff_text = f"次の順位まで **{diff:,} XP**！"
 
-        t_disp = title_display(resolve_display_title(guild.id))
+        tid, stars = get_display_title_with_stars(guild.id)
+        t_disp = title_display(tid, stars)
         desc += f"{medal} **{guild.name}**{t_disp}\n　総XP：**{total_xp:,}** ／ {active}人 ／ {diff_text}\n"
 
     if not desc:
