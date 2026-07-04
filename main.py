@@ -1303,6 +1303,106 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /rankcheck
+# =========================
+@bot.tree.command(name="rankcheck", description="自分のランク維持状況を確認（降格リスクチェック）")
+async def rankcheck(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data     = load_data(guild_id)
+    info     = ensure_user_data(data, user_id)
+
+    level      = info.get("level", 1)
+    weekly_xp  = info.get("weekly_xp", 0)
+
+    # 自分に適用されるルールを検索
+    rule = None
+    for min_lv, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
+        if level >= min_lv:
+            rule = (min_lv, req_xp, penalty, rank_name)
+            break
+
+    if rule is None:
+        await interaction.followup.send(
+            "ランク維持条件の対象外です（MEMBER Lite未満）。\nどんどんメッセージを送ってレベルアップしよう！",
+            ephemeral=True
+        )
+        return
+
+    min_lv, req_xp, penalty, rank_name = rule
+
+    # 緩和条件チェック
+    relax_conditions = get_weekly_relax_conditions()
+    global_ranking   = get_global_weekly_ranking()
+    top10_set        = {(gid_str, uid) for gid_str, uid, _ in global_ranking[:10]}
+    gid_uid          = (str(guild_id), user_id)
+    pool_dict        = dict(RANK_MAINTENANCE_POOL)
+
+    relax_met  = sum(1 for cid in relax_conditions if check_relax_condition(cid, info, top10_set, gid_uid))
+    reduction  = int(req_xp * RANK_MAINTENANCE_RELAX_PERCENT * relax_met)
+    threshold  = req_xp - reduction
+    need_xp    = max(0, threshold - weekly_xp)
+
+    # リセットまでの残り時間
+    now = datetime.now(JST)
+    days_until_monday = (7 - now.weekday()) % 7 or 7
+    reset_dt   = (now + timedelta(days=days_until_monday)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    remain_sec = int((reset_dt - now).total_seconds())
+    remain_d   = remain_sec // 86400
+    remain_h   = (remain_sec % 86400) // 3600
+    remain_m   = (remain_sec % 3600) // 60
+
+    rank_icons = {
+        "Legend": "💎", "VIP": "👑", "VIP Lite": "⭐",
+        "Premiere": "🔥", "CORE": "🔵", "MEMBER": "🟢", "MEMBER Lite": "⚪",
+    }
+    icon = rank_icons.get(rank_name, "▸")
+
+    if need_xp == 0:
+        status_line = f"✅ **維持条件達成！** このまま月曜を迎えれば安全です。"
+        color = discord.Color.green()
+    else:
+        status_line = f"⚠️ あと **{need_xp:,} XP** 必要です！"
+        color = discord.Color.orange() if remain_d >= 2 else discord.Color.red()
+
+    # 緩和条件の達成状況
+    relax_lines = "\n".join(
+        f"{'✅' if check_relax_condition(cid, info, top10_set, gid_uid) else '⬜'} {pool_dict.get(cid, cid)}"
+        for cid in relax_conditions
+    )
+
+    embed = discord.Embed(
+        title=f"{icon} {rank_name} ランク維持チェック",
+        description=status_line,
+        color=color
+    )
+    embed.add_field(
+        name="📊 週間XP",
+        value=f"**{weekly_xp:,}** / 必要 **{threshold:,}** XP\n（基準 {req_xp:,} − 緩和 {reduction:,}）",
+        inline=False
+    )
+    embed.add_field(
+        name=f"🛡️ 今週の緩和条件（{relax_met}/{len(relax_conditions)} 達成）",
+        value=relax_lines or "（なし）",
+        inline=False
+    )
+    embed.add_field(
+        name="⏳ リセットまで",
+        value=f"**{remain_d}日{remain_h}時間{remain_m}分**（月曜 18:00 JST）",
+        inline=True
+    )
+    embed.add_field(
+        name="⚠️ 未達成時のペナルティ",
+        value=f"レベル **-{penalty}** 降格",
+        inline=True
+    )
+    embed.set_footer(text=f"Lv{level} / {rank_name}")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+# =========================
 # /globalrank
 # =========================
 @bot.tree.command(name="globalrank", description="全国週間XPランキングTOP10と自分の順位を確認")
