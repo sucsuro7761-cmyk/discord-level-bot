@@ -2215,9 +2215,9 @@ async def rank_maintenance_warning_task():
     today = now.strftime("%Y-%m-%d")
     weekday = now.weekday()  # 0=Mon ... 2=Wed, 5=Sat, 6=Sun
 
-    if not (now.hour == 21 and now.minute == 0):
+    if not (now.hour == 18 and now.minute == 0):
         return
-    if weekday not in (2, 5, 6):
+    if weekday == 0:  # 月曜18:00はリセットタスクと重複するためスキップ
         return
     if _rank_warning_fired.get(today):
         return
@@ -2229,17 +2229,19 @@ async def rank_maintenance_warning_task():
     global_ranking = get_global_weekly_ranking()
     top10_gid_uid_set = {(gid_str, uid) for gid_str, uid, _ in global_ranking[:10]}
 
-    if weekday == 2:
-        label = "📅 水曜日"
-        days_left = 5
+    # 月曜18:00リセットまでの残り日数
+    days_left = (7 - weekday) % 7  # 火=6, 水=5, 木=4, 金=3, 土=2, 日=1
+    if days_left >= 5:
+        label = f"📅 残り{days_left}日"
+        color = discord.Color.blue()
+    elif days_left >= 3:
+        label = f"⚠️ 残り{days_left}日"
         color = discord.Color.yellow()
-    elif weekday == 5:
-        label = "⚠️ 土曜日"
-        days_left = 2
+    elif days_left == 2:
+        label = f"🚨 残り{days_left}日"
         color = discord.Color.orange()
     else:
-        label = "🚨 ラストチャンス（日曜日）"
-        days_left = 1
+        label = "🔥 ラストチャンス！残り1日"
         color = discord.Color.red()
 
     for guild in bot.guilds:
