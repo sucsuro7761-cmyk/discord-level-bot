@@ -2764,11 +2764,14 @@ async def boss_spawn_task():
             new_max_hp = old_max_hp  # スケールアップなし
 
             if notify_channel:
-                await notify_channel.send(
-                    f"💀 **ボスは討伐されませんでした...**\n"
-                    f"ボスが回復して再出現！ HP +{recover:,} 回復！\n"
-                    f"今週こそリベンジだ！"
-                )
+                try:
+                    await notify_channel.send(
+                        f"💀 **ボスは討伐されませんでした...**\n"
+                        f"ボスが回復して再出現！ HP +{recover:,} 回復！\n"
+                        f"今週こそリベンジだ！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
         else:
             # 討伐成功 or 初回：通常スケール
             new_max_hp = calc_boss_hp(cleared)
