@@ -2822,19 +2822,19 @@ async def boss_spawn_task():
                 pass
 
 # =========================
-# 週ボス：ダメージ報告（8時・16時・24時）
+# 週ボス：ダメージ報告（21時）
 # =========================
-_boss_report_fired = {}  # { "YYYY-MM-DD_HH": True }
+_boss_report_fired = {}  # { "YYYY-MM-DD": True }
 
 @tasks.loop(minutes=1)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
     now = datetime.now(JST)
-    if now.hour not in [8, 16, 0] or now.minute != 0:
+    if now.hour != 21 or now.minute != 0:
         return
 
-    fire_key = now.strftime("%Y-%m-%d_%H")
+    fire_key = now.strftime("%Y-%m-%d")
     if _boss_report_fired.get(fire_key):
         return
     _boss_report_fired[fire_key] = True
@@ -2842,7 +2842,7 @@ async def boss_damage_report():
     # 古いフラグを削除
     today = now.strftime("%Y-%m-%d")
     for key in list(_boss_report_fired.keys()):
-        if key.split("_")[0] < today:
+        if key < today:
             del _boss_report_fired[key]
 
     medals = ["🥇", "🥈", "🥉"]
