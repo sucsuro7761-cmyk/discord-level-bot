@@ -249,6 +249,17 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 500000, "description": "週間コイン獲得が合計500,000コイン以上"},
         ],
     },
+    "top10_crown": {
+        "name": "👑 10冠",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 1,  "description": "週間全国ランキングTOP10に1人以上ランクイン"},
+            {"stars": 2, "threshold": 3,  "description": "週間全国ランキングTOP10に3人以上ランクイン"},
+            {"stars": 3, "threshold": 5,  "description": "週間全国ランキングTOP10に5人以上ランクイン"},
+            {"stars": 4, "threshold": 7,  "description": "週間全国ランキングTOP10に7人以上ランクイン"},
+            {"stars": 5, "threshold": 10, "description": "週間全国ランキングTOP10を独占（10人）"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:
