@@ -271,6 +271,17 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 1000000, "description": "週間XP合計が1,000,000以上"},
         ],
     },
+    "legend_of": {
+        "name": "✨ 伝説の…",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 1,  "description": "Legendランクのメンバーが1人以上"},
+            {"stars": 2, "threshold": 3,  "description": "Legendランクのメンバーが3人以上"},
+            {"stars": 3, "threshold": 5,  "description": "Legendランクのメンバーが5人以上"},
+            {"stars": 4, "threshold": 10, "description": "Legendランクのメンバーが10人以上"},
+            {"stars": 5, "threshold": 20, "description": "Legendランクのメンバーが20人以上"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:

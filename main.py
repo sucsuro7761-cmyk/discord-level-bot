@@ -1936,6 +1936,31 @@ async def weekly_ranking_task():
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
+        # Legendランク人数チェック → legend_of 称号（☆システム）
+        legend_count = sum(
+            1 for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("level", 1) >= 101
+        )
+        legend_defn = TITLE_DEFINITIONS["legend_of"]
+        legend_new_stars = max(
+            (t["stars"] for t in legend_defn["tiers"] if legend_count >= t["threshold"]),
+            default=0
+        )
+        if legend_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "legend_of", legend_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"✨ **{title_text}**\n"
+                        f"**{legend_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
         # 週間全国ランキングTOP10入り人数チェック → top10_crown 称号（☆システム）
         gid_str = str(gid)
         top10_count = sum(1 for g, u, _ in global_top10 if g == gid_str)
