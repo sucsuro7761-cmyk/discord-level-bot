@@ -260,6 +260,17 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 10, "description": "週間全国ランキングTOP10を独占（10人）"},
         ],
     },
+    "hot_server": {
+        "name": "🔥 炎上サーバー",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 50000,   "description": "週間XP合計が50,000以上"},
+            {"stars": 2, "threshold": 100000,  "description": "週間XP合計が100,000以上"},
+            {"stars": 3, "threshold": 250000,  "description": "週間XP合計が250,000以上"},
+            {"stars": 4, "threshold": 500000,  "description": "週間XP合計が500,000以上"},
+            {"stars": 5, "threshold": 1000000, "description": "週間XP合計が1,000,000以上"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:
