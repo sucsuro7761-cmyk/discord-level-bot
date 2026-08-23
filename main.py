@@ -36,7 +36,8 @@ from utils.config import (
     get_level_channel_id, set_level_channel_id,
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
-    get_earned_titles, add_earned_title, get_active_title, set_active_title,
+    get_earned_titles, add_earned_title, set_title_stars,
+    get_active_title, set_active_title,
     resolve_display_title, increment_champion_wins, get_display_title_with_stars,
 )
 from utils.data import (
@@ -1936,7 +1937,7 @@ async def weekly_ranking_task():
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-        # Legendランク人数チェック → legend_of 称号（☆システム）
+        # Legendランク人数チェック → legend_of 称号（☆システム・降格あり）
         legend_count = sum(
             1 for uid, info in data.items()
             if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("level", 1) >= 101
@@ -1946,20 +1947,38 @@ async def weekly_ranking_task():
             (t["stars"] for t in legend_defn["tiers"] if legend_count >= t["threshold"]),
             default=0
         )
-        if legend_new_stars > 0:
-            is_new, old_stars, curr_stars = add_earned_title(gid, "legend_of", legend_new_stars)
-            if (is_new or curr_stars > old_stars) and notify_channel:
-                tier_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == curr_stars)
-                star_badge = "☆" * curr_stars
-                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
-                try:
-                    await notify_channel.send(
-                        f"✨ **{title_text}**\n"
-                        f"**{legend_defn['name']} {star_badge}** — {tier_desc}\n"
-                        f"`/settitle` で表示する称号を設定できます！"
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+        earned_now = get_earned_titles(gid)
+        legend_old_stars = earned_now.get("legend_of", 0)
+        if legend_new_stars != legend_old_stars:
+            old_s, cur_s = set_title_stars(gid, "legend_of", legend_new_stars)
+            if notify_channel:
+                if cur_s > old_s:
+                    tier_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == cur_s)
+                    star_badge = "☆" * cur_s
+                    title_text = "新しい称号を獲得！" if old_s == 0 else f"称号が昇格！☆{old_s} → ☆{cur_s}"
+                    try:
+                        await notify_channel.send(
+                            f"✨ **{title_text}**\n"
+                            f"**{legend_defn['name']} {star_badge}** — {tier_desc}\n"
+                            f"`/settitle` で表示する称号を設定できます！"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                elif cur_s < old_s:
+                    if cur_s == 0:
+                        demote_desc = "Legendランクのメンバーがいなくなりました"
+                        star_badge = ""
+                    else:
+                        demote_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == cur_s)
+                        star_badge = f" {'☆' * cur_s}"
+                    try:
+                        await notify_channel.send(
+                            f"📉 **称号が降格…**\n"
+                            f"**{legend_defn['name']}{star_badge}**（☆{old_s} → {'なし' if cur_s == 0 else f'☆{cur_s}'}）\n"
+                            f"{demote_desc}"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
         # 週間全国ランキングTOP10入り人数チェック → top10_crown 称号（☆システム）
         gid_str = str(gid)

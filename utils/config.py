@@ -160,6 +160,27 @@ def add_earned_title(guild_id, title_id: str, stars: int = 1) -> tuple[bool, int
     save_config(config)
     return old_stars == 0, old_stars, stars
 
+def set_title_stars(guild_id, title_id: str, stars: int) -> tuple[int, int]:
+    """
+    称号の星レベルを強制セット（昇格・降格どちらも可）。
+    Returns: (old_stars, new_stars)
+    """
+    config = load_config()
+    gid = str(guild_id)
+    config.setdefault(gid, {})
+    raw = config[gid].get("earned_titles", {})
+    titles = _migrate_earned_titles(raw)
+    old_stars = titles.get(title_id, 0)
+    if old_stars == stars:
+        return old_stars, stars
+    if stars > 0:
+        titles[title_id] = stars
+    else:
+        titles.pop(title_id, None)
+    config[gid]["earned_titles"] = titles
+    save_config(config)
+    return old_stars, stars
+
 def get_champion_wins(guild_id) -> int:
     config = load_config()
     return config.get(str(guild_id), {}).get("champion_wins", 0)
