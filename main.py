@@ -349,6 +349,10 @@ async def check_level_up(member, data, user_id):
         info["coins"] = info.get("coins", 0) + coin_reward
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_reward
 
+        # メンション設定（オフなら名前のみ）
+        use_mention = data[user_id].get("levelup_mention", True)
+        name_str = member.mention if use_mention else f"**{member.display_name}**"
+
         # ランクロールが昇格したときのみ通知
         if rank_changed and notify_channel:
             new_rank = None
@@ -358,7 +362,7 @@ async def check_level_up(member, data, user_id):
                     break
             try:
                 await notify_channel.send(
-                    f"🎉 {member.mention} が **{new_rank}** にランクアップしました！ （Lv{new_level}）💰 +{coin_reward}コイン"
+                    f"🎉 {name_str} が **{new_rank}** にランクアップしました！ （Lv{new_level}）💰 +{coin_reward}コイン"
                 )
             except discord.DiscordServerError:
                 pass
@@ -370,7 +374,7 @@ async def check_level_up(member, data, user_id):
                 try:
                     await member.add_roles(role)
                     if notify_channel:
-                        await notify_channel.send(f"📸 {member.mention} が **{role_name}** を獲得しました！")
+                        await notify_channel.send(f"📸 {name_str} が **{role_name}** を獲得しました！")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -1304,6 +1308,25 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /levelnotify
+# =========================
+@bot.tree.command(name="levelnotify", description="レベルアップ通知のメンションをオン/オフ切り替え")
+async def levelnotify(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data     = load_data(guild_id)
+    info     = ensure_user_data(data, user_id)
+
+    current = info.get("levelup_mention", True)
+    info["levelup_mention"] = not current
+    save_data(guild_id, data)
+
+    if info["levelup_mention"]:
+        await interaction.followup.send("🔔 レベルアップ通知のメンションを **オン** にしました！", ephemeral=True)
+    else:
+        await interaction.followup.send("🔕 レベルアップ通知のメンションを **オフ** にしました。\n（通知は引き続き送信されますが、メンションされなくなります）", ephemeral=True)
+
 # /rankcheck
 # =========================
 @bot.tree.command(name="rankcheck", description="自分のランク維持状況を確認（降格リスクチェック）")
