@@ -36,7 +36,8 @@ from utils.config import (
     get_level_channel_id, set_level_channel_id,
     get_xp_channel_ids, add_xp_channel_id, remove_xp_channel_id, clear_xp_channels,
     get_notification_role_id, set_notification_role_id, clear_notification_role_id,
-    get_earned_titles, add_earned_title, get_active_title, set_active_title,
+    get_earned_titles, add_earned_title, set_title_stars,
+    get_active_title, set_active_title,
     resolve_display_title, increment_champion_wins, get_display_title_with_stars,
 )
 from utils.data import (
@@ -348,6 +349,10 @@ async def check_level_up(member, data, user_id):
         info["coins"] = info.get("coins", 0) + coin_reward
         info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + coin_reward
 
+        # メンション設定（オフなら名前のみ）
+        use_mention = data[user_id].get("levelup_mention", True)
+        name_str = member.mention if use_mention else f"**{member.display_name}**"
+
         # ランクロールが昇格したときのみ通知
         if rank_changed and notify_channel:
             new_rank = None
@@ -357,7 +362,7 @@ async def check_level_up(member, data, user_id):
                     break
             try:
                 await notify_channel.send(
-                    f"🎉 {member.mention} が **{new_rank}** にランクアップしました！ （Lv{new_level}）💰 +{coin_reward}コイン"
+                    f"🎉 {name_str} が **{new_rank}** にランクアップしました！ （Lv{new_level}）💰 +{coin_reward}コイン"
                 )
             except discord.DiscordServerError:
                 pass
@@ -369,7 +374,7 @@ async def check_level_up(member, data, user_id):
                 try:
                     await member.add_roles(role)
                     if notify_channel:
-                        await notify_channel.send(f"📸 {member.mention} が **{role_name}** を獲得しました！")
+                        await notify_channel.send(f"📸 {name_str} が **{role_name}** を獲得しました！")
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
@@ -1303,6 +1308,25 @@ async def weeklynote(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /levelnotify
+# =========================
+@bot.tree.command(name="levelnotify", description="レベルアップ通知のメンションをオン/オフ切り替え")
+async def levelnotify(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild_id = interaction.guild.id
+    user_id  = str(interaction.user.id)
+    data     = load_data(guild_id)
+    info     = ensure_user_data(data, user_id)
+
+    current = info.get("levelup_mention", True)
+    info["levelup_mention"] = not current
+    save_data(guild_id, data)
+
+    if info["levelup_mention"]:
+        await interaction.followup.send("🔔 レベルアップ通知のメンションを **オン** にしました！", ephemeral=True)
+    else:
+        await interaction.followup.send("🔕 レベルアップ通知のメンションを **オフ** にしました。\n（通知は引き続き送信されますが、メンションされなくなります）", ephemeral=True)
+
 # /rankcheck
 # =========================
 @bot.tree.command(name="rankcheck", description="自分のランク維持状況を確認（降格リスクチェック）")
@@ -1905,6 +1929,98 @@ async def weekly_ranking_task():
                     await notify_channel.send(
                         f"💰 **{title_text}**\n"
                         f"**{rich_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        # 週間XP合計チェック → hot_server 称号（☆システム）
+        total_weekly_xp = sum(
+            info.get("weekly_xp", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        hot_defn = TITLE_DEFINITIONS["hot_server"]
+        hot_new_stars = max(
+            (t["stars"] for t in hot_defn["tiers"] if total_weekly_xp >= t["threshold"]),
+            default=0
+        )
+        if hot_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "hot_server", hot_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in hot_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"🔥 **{title_text}**\n"
+                        f"**{hot_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        # Legendランク人数チェック → legend_of 称号（☆システム・降格あり）
+        legend_count = sum(
+            1 for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("level", 1) >= 101
+        )
+        legend_defn = TITLE_DEFINITIONS["legend_of"]
+        legend_new_stars = max(
+            (t["stars"] for t in legend_defn["tiers"] if legend_count >= t["threshold"]),
+            default=0
+        )
+        earned_now = get_earned_titles(gid)
+        legend_old_stars = earned_now.get("legend_of", 0)
+        if legend_new_stars != legend_old_stars:
+            old_s, cur_s = set_title_stars(gid, "legend_of", legend_new_stars)
+            if notify_channel:
+                if cur_s > old_s:
+                    tier_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == cur_s)
+                    star_badge = "☆" * cur_s
+                    title_text = "新しい称号を獲得！" if old_s == 0 else f"称号が昇格！☆{old_s} → ☆{cur_s}"
+                    try:
+                        await notify_channel.send(
+                            f"✨ **{title_text}**\n"
+                            f"**{legend_defn['name']} {star_badge}** — {tier_desc}\n"
+                            f"`/settitle` で表示する称号を設定できます！"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                elif cur_s < old_s:
+                    if cur_s == 0:
+                        demote_desc = "Legendランクのメンバーがいなくなりました"
+                        star_badge = ""
+                    else:
+                        demote_desc = next(t["description"] for t in legend_defn["tiers"] if t["stars"] == cur_s)
+                        star_badge = f" {'☆' * cur_s}"
+                    try:
+                        await notify_channel.send(
+                            f"📉 **称号が降格…**\n"
+                            f"**{legend_defn['name']}{star_badge}**（☆{old_s} → {'なし' if cur_s == 0 else f'☆{cur_s}'}）\n"
+                            f"{demote_desc}"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+
+        # 週間全国ランキングTOP10入り人数チェック → top10_crown 称号（☆システム）
+        gid_str = str(gid)
+        top10_count = sum(1 for g, u, _ in global_top10 if g == gid_str)
+        crown_defn = TITLE_DEFINITIONS["top10_crown"]
+        crown_new_stars = max(
+            (t["stars"] for t in crown_defn["tiers"] if top10_count >= t["threshold"]),
+            default=0
+        )
+        if crown_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "top10_crown", crown_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in crown_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"👑 **{title_text}**\n"
+                        f"**{crown_defn['name']} {star_badge}** — {tier_desc}\n"
                         f"`/settitle` で表示する称号を設定できます！"
                     )
                 except (discord.Forbidden, discord.HTTPException):
@@ -2822,19 +2938,19 @@ async def boss_spawn_task():
                 pass
 
 # =========================
-# 週ボス：ダメージ報告（8時・16時・24時）
+# 週ボス：ダメージ報告（21時）
 # =========================
-_boss_report_fired = {}  # { "YYYY-MM-DD_HH": True }
+_boss_report_fired = {}  # { "YYYY-MM-DD": True }
 
 @tasks.loop(minutes=1)
 async def boss_damage_report():
     await bot.wait_until_ready()
 
     now = datetime.now(JST)
-    if now.hour not in [8, 16, 0] or now.minute != 0:
+    if now.hour != 21 or now.minute != 0:
         return
 
-    fire_key = now.strftime("%Y-%m-%d_%H")
+    fire_key = now.strftime("%Y-%m-%d")
     if _boss_report_fired.get(fire_key):
         return
     _boss_report_fired[fire_key] = True
@@ -2842,7 +2958,7 @@ async def boss_damage_report():
     # 古いフラグを削除
     today = now.strftime("%Y-%m-%d")
     for key in list(_boss_report_fired.keys()):
-        if key.split("_")[0] < today:
+        if key < today:
             del _boss_report_fired[key]
 
     medals = ["🥇", "🥈", "🥉"]

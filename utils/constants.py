@@ -249,6 +249,39 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 500000, "description": "週間コイン獲得が合計500,000コイン以上"},
         ],
     },
+    "top10_crown": {
+        "name": "👑 10冠",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 1,  "description": "週間全国ランキングTOP10に1人以上ランクイン"},
+            {"stars": 2, "threshold": 3,  "description": "週間全国ランキングTOP10に3人以上ランクイン"},
+            {"stars": 3, "threshold": 5,  "description": "週間全国ランキングTOP10に5人以上ランクイン"},
+            {"stars": 4, "threshold": 7,  "description": "週間全国ランキングTOP10に7人以上ランクイン"},
+            {"stars": 5, "threshold": 10, "description": "週間全国ランキングTOP10を独占（10人）"},
+        ],
+    },
+    "hot_server": {
+        "name": "🔥 炎上サーバー",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 50000,   "description": "週間XP合計が50,000以上"},
+            {"stars": 2, "threshold": 100000,  "description": "週間XP合計が100,000以上"},
+            {"stars": 3, "threshold": 250000,  "description": "週間XP合計が250,000以上"},
+            {"stars": 4, "threshold": 500000,  "description": "週間XP合計が500,000以上"},
+            {"stars": 5, "threshold": 1000000, "description": "週間XP合計が1,000,000以上"},
+        ],
+    },
+    "legend_of": {
+        "name": "✨ 伝説の…",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 1,  "description": "Legendランクのメンバーが1人以上"},
+            {"stars": 2, "threshold": 3,  "description": "Legendランクのメンバーが3人以上"},
+            {"stars": 3, "threshold": 5,  "description": "Legendランクのメンバーが5人以上"},
+            {"stars": 4, "threshold": 10, "description": "Legendランクのメンバーが10人以上"},
+            {"stars": 5, "threshold": 20, "description": "Legendランクのメンバーが20人以上"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:
@@ -283,7 +316,7 @@ DAILY_MISSIONS = {
 # =========================
 # (min_level, required_weekly_xp, penalty_levels, rank_display_name) - 高い順で並べる
 RANK_MAINTENANCE_RULES = [
-    (101, 10000, 5, "Legend"),
+    (101, 7500,  5, "Legend"),
     (75,  5000,  4, "VIP"),
     (50,  3000,  3, "VIP Lite"),
     (30,  1500,  2, "Premiere"),
