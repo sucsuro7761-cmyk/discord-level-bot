@@ -39,6 +39,7 @@ from utils.config import (
     get_earned_titles, add_earned_title, set_title_stars,
     get_active_title, set_active_title,
     resolve_display_title, increment_champion_wins, get_display_title_with_stars,
+    get_champion_consecutive, increment_champion_consecutive, reset_champion_consecutive,
 )
 from utils.data import (
     data_file, boss_file, event_boss_file, get_data_lock,
@@ -970,6 +971,7 @@ async def on_voice_state_update(member, before, after):
                 data[user_id]["xp"] += gain
                 data[user_id]["weekly_xp"] += gain
                 data[user_id]["weekly_vc_xp"] = data[user_id].get("weekly_vc_xp", 0) + gain
+                data[user_id]["weekly_vc_minutes"] = data[user_id].get("weekly_vc_minutes", 0.0) + 0.5
 
                 # ミッション進捗：VC滞在（30秒ごとに0.5分加算）・XP獲得
                 vc_info_m = ensure_user_data(data, user_id)
@@ -1752,7 +1754,15 @@ async def weekly_ranking_task():
         [(g, get_server_weekly_xp(g)[0], get_server_weekly_xp(g)[1]) for g in bot.guilds],
         key=lambda x: x[1], reverse=True
     )
-    if server_results and server_results[0][1] > 0:
+    champion_guild_id = server_results[0][0].id if (server_results and server_results[0][1] > 0) else None
+
+    # 連続王者カウント：優勝以外のサーバーはストリークをリセット
+    for g, _, _ in server_results:
+        if g.id == champion_guild_id:
+            continue
+        reset_champion_consecutive(g.id)
+
+    if champion_guild_id:
         champion_guild = server_results[0][0]
         defn = TITLE_DEFINITIONS["weekly_champion"]
         wins = increment_champion_wins(champion_guild.id)
@@ -1766,6 +1776,31 @@ async def weekly_ranking_task():
             champion_label = f"🏆 **週間王者称号が昇格！** {defn['name']}{star_badge}（{wins}回目の優勝）"
         else:
             champion_label = f"🏆 **週間王者称号を防衛！** {defn['name']}{star_badge}（通算{wins}回）"
+
+        # 連続王者称号チェック
+        streak = increment_champion_consecutive(champion_guild.id)
+        consec_defn = TITLE_DEFINITIONS["consecutive_champion"]
+        consec_stars = max(
+            (t["stars"] for t in consec_defn["tiers"] if streak >= t["threshold"]),
+            default=0
+        )
+        if consec_stars > 0:
+            c_is_new, c_old, c_cur = add_earned_title(champion_guild.id, "consecutive_champion", consec_stars)
+            if c_is_new or c_cur > c_old:
+                ch_id = get_level_channel_id(champion_guild.id)
+                consec_ch = champion_guild.get_channel(ch_id) if ch_id else None
+                if consec_ch:
+                    tier_desc = next(t["description"] for t in consec_defn["tiers"] if t["stars"] == c_cur)
+                    badge = "☆" * c_cur
+                    c_title_text = "新しい称号を獲得！" if c_is_new else f"称号が昇格！☆{c_old} → ☆{c_cur}"
+                    try:
+                        await consec_ch.send(
+                            f"⚡ **{c_title_text}**\n"
+                            f"**{consec_defn['name']} {badge}** — {tier_desc}（{streak}週連続！）\n"
+                            f"`/settitle` で表示する称号を設定できます！"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
         medals = ["🥇", "🥈", "🥉"]
         desc = ""
@@ -1934,6 +1969,58 @@ async def weekly_ranking_task():
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
+        # 週間VC滞在時間合計チェック → vc_addicts 称号（☆システム）
+        total_vc_minutes = sum(
+            info.get("weekly_vc_minutes", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        vc_defn = TITLE_DEFINITIONS["vc_addicts"]
+        vc_new_stars = max(
+            (t["stars"] for t in vc_defn["tiers"] if total_vc_minutes >= t["threshold"]),
+            default=0
+        )
+        if vc_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "vc_addicts", vc_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in vc_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"🎙️ **{title_text}**\n"
+                        f"**{vc_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        # 週間チェスト開封数合計チェック → box_kingdom 称号（☆システム）
+        total_chest = sum(
+            info.get("weekly_chest_count", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        box_defn = TITLE_DEFINITIONS["box_kingdom"]
+        box_new_stars = max(
+            (t["stars"] for t in box_defn["tiers"] if total_chest >= t["threshold"]),
+            default=0
+        )
+        if box_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "box_kingdom", box_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in box_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"📦 **{title_text}**\n"
+                        f"**{box_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
         # 週間XP合計チェック → hot_server 称号（☆システム）
         total_weekly_xp = sum(
             info.get("weekly_xp", 0)
@@ -2034,6 +2121,7 @@ async def weekly_ranking_task():
                 data[uid]["weekly_xp"] = 0
                 data[uid]["weekly_chat_xp"] = 0
                 data[uid]["weekly_vc_xp"] = 0
+                data[uid]["weekly_vc_minutes"] = 0
                 data[uid]["weekly_active_days"] = []
                 data[uid]["weekly_coins_spent"] = 0
                 data[uid]["weekly_coins_earned"] = 0
@@ -4109,6 +4197,7 @@ async def startbattle(interaction: discord.Interaction):
             data[uid]["weekly_xp"] = 0
             data[uid]["weekly_chat_xp"] = 0
             data[uid]["weekly_vc_xp"] = 0
+            data[uid]["weekly_vc_minutes"] = 0
             data[uid]["weekly_active_days"] = []
             data[uid]["weekly_coins_spent"] = 0
         save_data(guild.id, data)

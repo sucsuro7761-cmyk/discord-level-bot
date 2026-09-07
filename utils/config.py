@@ -181,6 +181,26 @@ def set_title_stars(guild_id, title_id: str, stars: int) -> tuple[int, int]:
     save_config(config)
     return old_stars, stars
 
+def get_champion_consecutive(guild_id) -> int:
+    config = load_config()
+    return config.get(str(guild_id), {}).get("champion_consecutive", 0)
+
+def increment_champion_consecutive(guild_id) -> int:
+    config = load_config()
+    gid = str(guild_id)
+    config.setdefault(gid, {})
+    streak = config[gid].get("champion_consecutive", 0) + 1
+    config[gid]["champion_consecutive"] = streak
+    save_config(config)
+    return streak
+
+def reset_champion_consecutive(guild_id) -> None:
+    config = load_config()
+    gid = str(guild_id)
+    if config.get(gid, {}).get("champion_consecutive", 0) != 0:
+        config.setdefault(gid, {})["champion_consecutive"] = 0
+        save_config(config)
+
 def get_champion_wins(guild_id) -> int:
     config = load_config()
     return config.get(str(guild_id), {}).get("champion_wins", 0)
