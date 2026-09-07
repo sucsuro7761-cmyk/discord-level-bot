@@ -529,6 +529,9 @@ async def on_message(message):
         return
     if message.guild is None:
         return
+    if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+        await bot.process_commands(message)
+        return
 
     guild_id = message.guild.id
     user_id = str(message.author.id)
