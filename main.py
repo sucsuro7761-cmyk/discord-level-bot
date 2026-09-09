@@ -2496,34 +2496,24 @@ async def rank_maintenance_warning_task():
         if not any(by_rank.values()):
             continue
 
-        embed = discord.Embed(
-            title=f"{label} ランク降格注意！",
-            description=f"月曜リセットまであと **{days_left}日** です！",
-            color=color
-        )
-
-        # 高いランク順にフィールドを追加
         rank_icons = {
             "Legend": "💎", "VIP": "👑", "VIP Lite": "⭐",
             "Premiere": "🔥", "CORE": "🔵", "MEMBER": "🟢", "MEMBER Lite": "⚪",
         }
-        for _, req_xp, penalty, rank_name in RANK_MAINTENANCE_RULES:
-            users = by_rank.get(rank_name, [])
-            if not users:
-                continue
-            icon = rank_icons.get(rank_name, "▸")
-            field_lines = "\n".join(
-                f"<@{uid}> {xp:,} / {thresh:,} XP（あと **{thresh - xp:,} XP** | -{pen}Lv）"
-                for uid, xp, thresh, pen in users
-            )
-            embed.add_field(
-                name=f"{icon} {rank_name}（維持: {req_xp:,} XP）",
-                value=field_lines,
-                inline=False
-            )
-
-        relax_text = "\n".join(f"・{pool_dict.get(cid, cid)}" for cid in relax_conditions)
-        embed.add_field(name="🛡️ 今週の緩和条件（各 -10% 軽減）", value=relax_text, inline=False)
+        summary_parts = [
+            f"{rank_icons.get(rank_name, '▸')} {rank_name} {len(users)}人"
+            for _, _, _, rank_name in RANK_MAINTENANCE_RULES
+            if (users := by_rank.get(rank_name, [])) and users
+        ]
+        embed = discord.Embed(
+            title=f"{label} ランク降格注意！",
+            description=(
+                f"月曜リセットまであと **{days_left}日** です。\n\n"
+                f"**降格リスク：** {' / '.join(summary_parts)}\n\n"
+                f"詳細は `/rankcheck` で確認できます！"
+            ),
+            color=color
+        )
         embed.set_footer(text="このまま月曜を迎えるとランクが下がります！")
         try:
             await notify_channel.send(embed=embed)
