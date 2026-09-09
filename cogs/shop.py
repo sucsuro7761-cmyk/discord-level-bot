@@ -14,6 +14,7 @@ from utils.data import (
     add_timed_buff,
     cleanup_expired_buffs,
     ensure_user_data,
+    get_data_lock,
     get_mission_progress,
     get_today_mission,
     load_boss,
@@ -551,8 +552,6 @@ class ShopCog(commands.Cog):
     async def invest(self, interaction: discord.Interaction, amount: int = 3000):
         guild_id = interaction.guild.id
         user_id  = str(interaction.user.id)
-        data = load_data(guild_id)
-        info = ensure_user_data(data, user_id)
 
         if amount % INVEST_STEP != 0:
             await interaction.response.send_message(
@@ -567,43 +566,47 @@ class ShopCog(commands.Cog):
             )
             return
 
-        inv = info.get("investment")
-        if inv:
-            claim_at = inv["invested_at"] + INVEST_DURATION
-            if time.time() < claim_at:
-                remain = int(claim_at - time.time())
-                h, m = divmod(remain // 60, 60)
+        async with get_data_lock(guild_id):
+            data = load_data(guild_id)
+            info = ensure_user_data(data, user_id)
+
+            inv = info.get("investment")
+            if inv:
+                claim_at = inv["invested_at"] + INVEST_DURATION
+                if time.time() < claim_at:
+                    remain = int(claim_at - time.time())
+                    h, m = divmod(remain // 60, 60)
+                    await interaction.response.send_message(
+                        f"📊 現在投資中です。回収可能まで残り **{h}時間{m}分**\n`/claiminvest` で回収してください。",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "📊 前回の投資がまだ回収されていません。\n`/claiminvest` で回収してからもう一度どうぞ！",
+                        ephemeral=True
+                    )
+                return
+
+            if not spend_coins(data, user_id, amount, "buy_investment_pack"):
                 await interaction.response.send_message(
-                    f"📊 現在投資中です。回収可能まで残り **{h}時間{m}分**\n`/claiminvest` で回収してください。",
+                    f"コインが足りません。\n必要: **{amount:,}コイン** ／ 所持: **{info.get('coins', 0):,}コイン**",
                     ephemeral=True
                 )
-            else:
-                await interaction.response.send_message(
-                    "📊 前回の投資がまだ回収されていません。\n`/claiminvest` で回収してからもう一度どうぞ！",
-                    ephemeral=True
-                )
-            return
+                return
 
-        if not spend_coins(data, user_id, amount, "buy_investment_pack"):
-            await interaction.response.send_message(
-                f"コインが足りません。\n必要: **{amount:,}コイン** ／ 所持: **{info.get('coins', 0):,}コイン**",
-                ephemeral=True
-            )
-            return
+            info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + amount
+            info["investment"] = {"amount": amount, "invested_at": time.time()}
 
-        info["weekly_coins_spent"] = info.get("weekly_coins_spent", 0) + amount
-        info["investment"] = {"amount": amount, "invested_at": time.time()}
-
-        add_mission_progress(info, "invest_done", 1)
-        member = interaction.guild.get_member(interaction.user.id)
-        if member and hasattr(self.bot, "try_auto_claim_mission"):
-            await self.bot.try_auto_claim_mission(interaction.guild, member, data, user_id)
-        shop_log = load_shop_log(guild_id)
-        week_key = datetime.now(JST).strftime("%Y-W%W")
-        shop_log.setdefault(week_key, {})
-        shop_log[week_key]["investment_pack"] = shop_log[week_key].get("investment_pack", 0) + 1
-        save_shop_log(guild_id, shop_log)
-        save_data(guild_id, data)
+            add_mission_progress(info, "invest_done", 1)
+            member = interaction.guild.get_member(interaction.user.id)
+            if member and hasattr(self.bot, "try_auto_claim_mission"):
+                await self.bot.try_auto_claim_mission(interaction.guild, member, data, user_id)
+            shop_log = load_shop_log(guild_id)
+            week_key = datetime.now(JST).strftime("%Y-W%W")
+            shop_log.setdefault(week_key, {})
+            shop_log[week_key]["investment_pack"] = shop_log[week_key].get("investment_pack", 0) + 1
+            save_shop_log(guild_id, shop_log)
+            save_data(guild_id, data)
 
         embed = discord.Embed(
             title="📈 投資完了！",
@@ -662,33 +665,35 @@ class ShopCog(commands.Cog):
     async def claiminvest(self, interaction: discord.Interaction):
         guild_id = interaction.guild.id
         user_id  = str(interaction.user.id)
-        data = load_data(guild_id)
-        info = ensure_user_data(data, user_id)
-        inv  = info.get("investment")
 
-        if not inv:
-            await interaction.response.send_message(
-                "📊 投資中のパックがありません。`/invest` で投資を始めましょう！", ephemeral=True
-            )
-            return
+        async with get_data_lock(guild_id):
+            data = load_data(guild_id)
+            info = ensure_user_data(data, user_id)
+            inv  = info.get("investment")
 
-        if time.time() < inv["invested_at"] + INVEST_DURATION:
-            remain = int(inv["invested_at"] + INVEST_DURATION - time.time())
-            h, m   = divmod(remain // 60, 60)
-            await interaction.response.send_message(
-                f"⏳ まだ回収できません。あと **{h}時間{m}分** 待ってください！", ephemeral=True
-            )
-            return
+            if not inv:
+                await interaction.response.send_message(
+                    "📊 投資中のパックがありません。`/invest` で投資を始めましょう！", ephemeral=True
+                )
+                return
 
-        amount               = inv["amount"]
-        multiplier, label, emoji = draw_investment()
-        payout               = int(amount * multiplier)
-        profit               = payout - amount
+            if time.time() < inv["invested_at"] + INVEST_DURATION:
+                remain = int(inv["invested_at"] + INVEST_DURATION - time.time())
+                h, m   = divmod(remain // 60, 60)
+                await interaction.response.send_message(
+                    f"⏳ まだ回収できません。あと **{h}時間{m}分** 待ってください！", ephemeral=True
+                )
+                return
 
-        info["coins"]               = info.get("coins", 0) + payout
-        info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + payout
-        info["investment"]          = None
-        save_data(guild_id, data)
+            amount               = inv["amount"]
+            multiplier, label, emoji = draw_investment()
+            payout               = int(amount * multiplier)
+            profit               = payout - amount
+
+            info["coins"]               = info.get("coins", 0) + payout
+            info["weekly_coins_earned"] = info.get("weekly_coins_earned", 0) + payout
+            info["investment"]          = None
+            save_data(guild_id, data)
 
         if multiplier >= 3.0:
             color = discord.Color.from_rgb(255, 215, 0)
