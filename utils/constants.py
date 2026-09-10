@@ -282,6 +282,39 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 20, "description": "Legendランクのメンバーが20人以上"},
         ],
     },
+    "vc_addicts": {
+        "name": "🎙️ VC廃人サーバー",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 500,   "description": "週間VC滞在時間が合計500分以上"},
+            {"stars": 2, "threshold": 1500,  "description": "週間VC滞在時間が合計1,500分以上"},
+            {"stars": 3, "threshold": 3000,  "description": "週間VC滞在時間が合計3,000分以上"},
+            {"stars": 4, "threshold": 6000,  "description": "週間VC滞在時間が合計6,000分以上"},
+            {"stars": 5, "threshold": 10000, "description": "週間VC滞在時間が合計10,000分以上"},
+        ],
+    },
+    "box_kingdom": {
+        "name": "📦 開封王国",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 10,  "description": "週間ミステリーボックス開封数が合計10個以上"},
+            {"stars": 2, "threshold": 30,  "description": "週間ミステリーボックス開封数が合計30個以上"},
+            {"stars": 3, "threshold": 60,  "description": "週間ミステリーボックス開封数が合計60個以上"},
+            {"stars": 4, "threshold": 100, "description": "週間ミステリーボックス開封数が合計100個以上"},
+            {"stars": 5, "threshold": 200, "description": "週間ミステリーボックス開封数が合計200個以上"},
+        ],
+    },
+    "consecutive_champion": {
+        "name": "⚡ 連続王者",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 2,  "description": "サーバー対抗戦を2週連続で1位獲得"},
+            {"stars": 2, "threshold": 4,  "description": "サーバー対抗戦を4週連続で1位獲得"},
+            {"stars": 3, "threshold": 8,  "description": "サーバー対抗戦を8週連続で1位獲得"},
+            {"stars": 4, "threshold": 15, "description": "サーバー対抗戦を15週連続で1位獲得"},
+            {"stars": 5, "threshold": 30, "description": "サーバー対抗戦を30週連続で1位獲得"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:
