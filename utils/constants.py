@@ -315,6 +315,17 @@ TITLE_DEFINITIONS: dict[str, dict] = {
             {"stars": 5, "threshold": 30, "description": "サーバー対抗戦を30週連続で1位獲得"},
         ],
     },
+    "shopaholic": {
+        "name": "🛒 金持ち自慢",
+        "trigger": "weekly_reset",
+        "tiers": [
+            {"stars": 1, "threshold": 10,  "description": "週間ショップ購入回数が合計10回以上"},
+            {"stars": 2, "threshold": 30,  "description": "週間ショップ購入回数が合計30回以上"},
+            {"stars": 3, "threshold": 60,  "description": "週間ショップ購入回数が合計60回以上"},
+            {"stars": 4, "threshold": 100, "description": "週間ショップ購入回数が合計100回以上"},
+            {"stars": 5, "threshold": 200, "description": "週間ショップ購入回数が合計200回以上"},
+        ],
+    },
 }
 
 def _stars_str(stars: int) -> str:
