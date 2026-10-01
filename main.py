@@ -4104,7 +4104,7 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
 
     medals = ["🥇", "🥈", "🥉"]
     desc = ""
-    for i, (guild, total_xp, active) in enumerate(results, start=1):
+    for i, (guild, total_xp, active) in enumerate(results[:10], start=1):
         medal = medals[i - 1] if i <= 3 else f"`{i}.`"
 
         # 次順位との差分
@@ -4124,18 +4124,18 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
 
     embed = discord.Embed(title=title, description=desc, color=color)
 
-    # 自サーバーがTOP10圏外の場合に追記
+    # 自サーバーの順位を常に追記
     if current_guild:
-        own_rank  = next((i + 1 for i, (g, _, _) in enumerate(results) if g.id == current_guild.id), None)
-        own_xp    = next((xp for g, xp, _ in results if g.id == current_guild.id), 0)
+        own_rank   = next((i + 1 for i, (g, _, _) in enumerate(results) if g.id == current_guild.id), None)
+        own_xp     = next((xp for g, xp, _ in results if g.id == current_guild.id), 0)
         own_active = next((a for g, _, a in results if g.id == current_guild.id), 0)
 
-        if own_rank and own_rank > 10:
+        if own_rank:
             if own_rank == 1:
                 own_diff_text = "👑 現在首位！"
             else:
-                prev_xp   = results[own_rank - 2][1]
-                diff      = prev_xp - own_xp
+                prev_xp       = results[own_rank - 2][1]
+                diff          = prev_xp - own_xp
                 own_diff_text = f"次の順位まで **{diff:,} XP**！"
 
             embed.add_field(
