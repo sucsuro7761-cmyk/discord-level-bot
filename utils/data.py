@@ -18,6 +18,9 @@ def boss_file(guild_id) -> str:
 def event_boss_file(guild_id) -> str:
     return f"{DATA_DIR}/event_boss_{guild_id}.json"
 
+def last_server_ranking_file() -> str:
+    return f"{DATA_DIR}/last_server_ranking.json"
+
 # =========================
 # データ競合防止ロック（ギルドごと）
 # =========================
@@ -77,6 +80,21 @@ _GLOBAL_BOSS_DEFAULT = {
     "active": False, "hp": 0, "max_hp": 0, "name": "",
     "damage": {}, "boost_days": 7, "boost_multiplier": 3,
 }
+
+def load_last_server_ranking() -> dict:
+    path = last_server_ranking_file()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+def save_last_server_ranking(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(last_server_ranking_file(), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def load_global_event_boss() -> dict:
     if os.path.exists(GLOBAL_EVENT_BOSS_FILE):

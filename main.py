@@ -46,6 +46,7 @@ from utils.data import (
     load_data, save_data, load_boss, save_boss,
     load_global_event_boss, save_global_event_boss,
     load_event_boss, save_event_boss,
+    load_last_server_ranking, save_last_server_ranking,
     ensure_user_data, now_ts, spend_coins, cleanup_expired_buffs, add_timed_buff,
     get_today_mission, get_mission_progress, add_mission_progress,
 )
@@ -1758,6 +1759,24 @@ async def weekly_ranking_task():
         key=lambda x: x[1], reverse=True
     )
     champion_guild_id = server_results[0][0].id if (server_results and server_results[0][1] > 0) else None
+
+    # 先週サーバーランキングTOP10をスナップショット保存
+    week_label = (now - timedelta(days=1)).strftime("%Y-W%V")
+    snapshot = {
+        "week": week_label,
+        "reset_at": now.strftime("%Y/%m/%d %H:%M"),
+        "results": [
+            {
+                "rank": i + 1,
+                "guild_id": str(g.id),
+                "guild_name": g.name,
+                "total_xp": total_xp,
+                "active_members": active,
+            }
+            for i, (g, total_xp, active) in enumerate(server_results[:10])
+        ],
+    }
+    save_last_server_ranking(snapshot)
 
     # 連続王者カウント：優勝以外のサーバーはストリークをリセット
     for g, _, _ in server_results:
@@ -4195,6 +4214,68 @@ async def serverranking(interaction: discord.Interaction):
     embed, _ = build_server_ranking_embed(bot, current_guild=interaction.guild)
     await interaction.response.send_message(embed=embed)
 
+# =========================
+# /lastserverranking（先週のサーバー対抗戦TOP10）
+# =========================
+@bot.tree.command(name="lastserverranking", description="先週のサーバー対抗戦TOP10の結果を表示")
+async def lastserverranking(interaction: discord.Interaction):
+    snapshot = load_last_server_ranking()
+    if not snapshot or not snapshot.get("results"):
+        await interaction.response.send_message(
+            "📭 先週のランキングデータがまだありません。週次リセット後に利用できます。",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉"]
+    desc = ""
+    own_rank_info = None
+    for entry in snapshot["results"]:
+        r     = entry["rank"]
+        medal = medals[r - 1] if r <= 3 else f"`{r}.`"
+        xp    = entry["total_xp"]
+        active = entry["active_members"]
+        name  = entry["guild_name"]
+
+        if r == 1:
+            diff_text = "👑 先週の覇者！"
+        else:
+            prev_xp   = snapshot["results"][r - 2]["total_xp"]
+            diff      = prev_xp - xp
+            diff_text = f"1位との差：**{diff:,} XP**"
+
+        line = f"{medal} **{name}**\n　総XP：**{xp:,}** ／ アクティブ{active}人 ／ {diff_text}\n"
+        desc += line
+
+        if entry["guild_id"] == str(interaction.guild.id):
+            own_rank_info = entry
+
+    embed = discord.Embed(
+        title=f"📅 先週のサーバー対抗戦 結果（{snapshot.get('week', '―')}）",
+        description=desc or "データなし",
+        color=discord.Color.blurple()
+    )
+
+    # 自鯖がTOP10圏外の場合はフィールドで追記
+    if own_rank_info is None:
+        # 先週のスナップショット外（11位以下）
+        embed.add_field(
+            name=f"📍 {interaction.guild.name} の先週の順位",
+            value="TOP10圏外でした",
+            inline=False
+        )
+    else:
+        r    = own_rank_info["rank"]
+        xp   = own_rank_info["total_xp"]
+        active = own_rank_info["active_members"]
+        embed.add_field(
+            name=f"📍 {interaction.guild.name} の先週の順位",
+            value=f"`{r}位` ／ 総XP：**{xp:,}** ／ アクティブ{active}人",
+            inline=False
+        )
+
+    embed.set_footer(text=f"集計時刻：{snapshot.get('reset_at', '―')} JST ／ 月曜リセット時のデータ")
+    await interaction.response.send_message(embed=embed)
 
 # =========================
 # /startbattle（bot管理者専用：対抗戦を即時リセット＆スタート）
