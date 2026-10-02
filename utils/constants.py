@@ -360,10 +360,10 @@ DAILY_MISSIONS = {
 # =========================
 # (min_level, required_weekly_xp, penalty_levels, rank_display_name) - 高い順で並べる
 RANK_MAINTENANCE_RULES = [
-    (101, 7500,  5, "Legend"),
-    (75,  5000,  4, "VIP"),
-    (50,  3000,  3, "VIP Lite"),
-    (30,  1500,  2, "Premiere"),
+    (101, 7500,  3, "Legend"),
+    (75,  5000,  2, "VIP"),
+    (50,  3000,  2, "VIP Lite"),
+    (30,  1500,  1, "Premiere"),
     (20,  500,   1, "CORE"),
     (10,  250,   1, "MEMBER"),
     (2,   100,   1, "MEMBER Lite"),
