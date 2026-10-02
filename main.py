@@ -46,6 +46,7 @@ from utils.data import (
     load_data, save_data, load_boss, save_boss,
     load_global_event_boss, save_global_event_boss,
     load_event_boss, save_event_boss,
+    load_last_global_ranking, save_last_global_ranking,
     ensure_user_data, now_ts, spend_coins, cleanup_expired_buffs, add_timed_buff,
     get_today_mission, get_mission_progress, add_mission_progress,
 )
@@ -1759,6 +1760,36 @@ async def weekly_ranking_task():
     )
     champion_guild_id = server_results[0][0].id if (server_results and server_results[0][1] > 0) else None
 
+    # 先週全国個人ランキングTOP10をスナップショット保存（XPリセット前）
+    week_label = (now - timedelta(days=1)).strftime("%Y-W%V")
+    _global_all = get_global_weekly_ranking()
+    _snap_top10 = []
+    for _rank, (_gid_str, _uid, _xp) in enumerate(_global_all[:10], start=1):
+        _g = bot.get_guild(int(_gid_str))
+        _d = load_data(int(_gid_str))
+        _info = _d.get(_uid, {})
+        _member = _g.get_member(int(_uid)) if _g else None
+        _snap_top10.append({
+            "rank":             _rank,
+            "guild_id":         _gid_str,
+            "guild_name":       _g.name if _g else "不明",
+            "user_id":          _uid,
+            "display_name":     _member.display_name if _member else _info.get("display_name", "不明"),
+            "level":            _info.get("level", 1),
+            "weekly_xp":        _xp,
+            "chat_xp":          _info.get("weekly_chat_xp", 0),
+            "vc_xp":            _info.get("weekly_vc_xp", 0),
+            "vc_minutes":       round(_info.get("weekly_vc_minutes", 0)),
+            "boss_damage":      _info.get("weekly_boss_damage", 0),
+            "missions_cleared": _info.get("weekly_missions_cleared", 0),
+            "coins_earned":     _info.get("weekly_coins_earned", 0),
+        })
+    save_last_global_ranking({
+        "week":     week_label,
+        "reset_at": now.strftime("%Y/%m/%d %H:%M"),
+        "top10":    _snap_top10,
+    })
+
     # 連続王者カウント：優勝以外のサーバーはストリークをリセット
     for g, _, _ in server_results:
         if g.id == champion_guild_id:
@@ -2019,6 +2050,32 @@ async def weekly_ranking_task():
                     await notify_channel.send(
                         f"📦 **{title_text}**\n"
                         f"**{box_defn['name']} {star_badge}** — {tier_desc}\n"
+                        f"`/settitle` で表示する称号を設定できます！"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+        # 週間ショップ購入回数合計チェック → shopaholic 称号（☆システム）
+        total_shop_purchases = sum(
+            info.get("weekly_shop_purchases", 0)
+            for uid, info in data.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict)
+        )
+        shop_defn = TITLE_DEFINITIONS["shopaholic"]
+        shop_new_stars = max(
+            (t["stars"] for t in shop_defn["tiers"] if total_shop_purchases >= t["threshold"]),
+            default=0
+        )
+        if shop_new_stars > 0:
+            is_new, old_stars, curr_stars = add_earned_title(gid, "shopaholic", shop_new_stars)
+            if (is_new or curr_stars > old_stars) and notify_channel:
+                tier_desc = next(t["description"] for t in shop_defn["tiers"] if t["stars"] == curr_stars)
+                star_badge = "☆" * curr_stars
+                title_text = "新しい称号を獲得！" if is_new else f"称号が昇格！☆{old_stars} → ☆{curr_stars}"
+                try:
+                    await notify_channel.send(
+                        f"🛒 **{title_text}**\n"
+                        f"**{shop_defn['name']} {star_badge}** — {tier_desc}\n"
                         f"`/settitle` で表示する称号を設定できます！"
                     )
                 except (discord.Forbidden, discord.HTTPException):
@@ -4078,7 +4135,7 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
 
     medals = ["🥇", "🥈", "🥉"]
     desc = ""
-    for i, (guild, total_xp, active) in enumerate(results, start=1):
+    for i, (guild, total_xp, active) in enumerate(results[:10], start=1):
         medal = medals[i - 1] if i <= 3 else f"`{i}.`"
 
         # 次順位との差分
@@ -4098,18 +4155,18 @@ def build_server_ranking_embed(bot, title="🌐 全サーバー週間XPランキ
 
     embed = discord.Embed(title=title, description=desc, color=color)
 
-    # 自サーバーがTOP10圏外の場合に追記
+    # 自サーバーの順位を常に追記
     if current_guild:
-        own_rank  = next((i + 1 for i, (g, _, _) in enumerate(results) if g.id == current_guild.id), None)
-        own_xp    = next((xp for g, xp, _ in results if g.id == current_guild.id), 0)
+        own_rank   = next((i + 1 for i, (g, _, _) in enumerate(results) if g.id == current_guild.id), None)
+        own_xp     = next((xp for g, xp, _ in results if g.id == current_guild.id), 0)
         own_active = next((a for g, _, a in results if g.id == current_guild.id), 0)
 
-        if own_rank and own_rank > 10:
+        if own_rank:
             if own_rank == 1:
                 own_diff_text = "👑 現在首位！"
             else:
-                prev_xp   = results[own_rank - 2][1]
-                diff      = prev_xp - own_xp
+                prev_xp       = results[own_rank - 2][1]
+                diff          = prev_xp - own_xp
                 own_diff_text = f"次の順位まで **{diff:,} XP**！"
 
             embed.add_field(
@@ -4169,6 +4226,52 @@ async def serverranking(interaction: discord.Interaction):
     embed, _ = build_server_ranking_embed(bot, current_guild=interaction.guild)
     await interaction.response.send_message(embed=embed)
 
+# =========================
+# /lastserverranking（先週のサーバー対抗戦TOP10）
+# =========================
+@bot.tree.command(name="lastglobalranking", description="先週の全国個人XPランキングTOP10と詳細情報を表示")
+async def lastglobalranking(interaction: discord.Interaction):
+    snapshot = load_last_global_ranking()
+    if not snapshot or not snapshot.get("top10"):
+        await interaction.response.send_message(
+            "📭 先週のランキングデータがまだありません。週次リセット後に利用できます。",
+            ephemeral=True
+        )
+        return
+
+    medals = ["🥇", "🥈", "🥉", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
+    embed = discord.Embed(
+        title=f"🌐 先週の全国個人XPランキング（{snapshot.get('week', '―')}）",
+        color=discord.Color.gold()
+    )
+
+    for entry in snapshot["top10"]:
+        r            = entry["rank"]
+        medal        = medals[r - 1] if r <= 10 else f"`{r}.`"
+        name         = entry.get("display_name", "不明")
+        guild_name   = entry.get("guild_name", "不明")
+        level        = entry.get("level", "?")
+        weekly_xp    = entry.get("weekly_xp", 0)
+        chat_xp      = entry.get("chat_xp", 0)
+        vc_xp        = entry.get("vc_xp", 0)
+        vc_min       = entry.get("vc_minutes", 0)
+        boss_dmg     = entry.get("boss_damage", 0)
+        missions     = entry.get("missions_cleared", 0)
+        coins        = entry.get("coins_earned", 0)
+
+        value = (
+            f"💬 チャットXP：**{chat_xp:,}** ／ 🎙️ VCXP：**{vc_xp:,}**（{vc_min}分）\n"
+            f"⚔️ ボスダメージ：**{boss_dmg:,}** ／ 🎯 ミッション：**{missions}回**\n"
+            f"💰 コイン獲得：**{coins:,}**"
+        )
+        embed.add_field(
+            name=f"{medal} {name}　Lv.{level}　総XP **{weekly_xp:,}**　（{guild_name}）",
+            value=value,
+            inline=False
+        )
+
+    embed.set_footer(text=f"集計時刻：{snapshot.get('reset_at', '―')} JST ／ 月曜リセット時のデータ")
+    await interaction.response.send_message(embed=embed)
 
 # =========================
 # /startbattle（bot管理者専用：対抗戦を即時リセット＆スタート）
