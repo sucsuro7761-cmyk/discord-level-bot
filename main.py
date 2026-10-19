@@ -3235,6 +3235,69 @@ async def boss_damage_report():
 
 
 # =========================
+# 週間サーバー内XPランキング通知（毎日21時）
+# =========================
+_weeklytop_notified = {}  # { "YYYY-MM-DD": True }
+
+@tasks.loop(minutes=1)
+async def weeklytop_notify_task():
+    await bot.wait_until_ready()
+    now = datetime.now(JST)
+
+    if now.hour != 21 or now.minute != 0:
+        return
+
+    fire_key = now.strftime("%Y-%m-%d")
+    if _weeklytop_notified.get(fire_key):
+        return
+    _weeklytop_notified[fire_key] = True
+
+    for key in list(_weeklytop_notified.keys()):
+        if key < fire_key:
+            del _weeklytop_notified[key]
+
+    medals = ["🥇", "🥈", "🥉"]
+
+    for guild in bot.guilds:
+        ch_id = get_level_channel_id(guild.id)
+        notify_channel = guild.get_channel(ch_id) if ch_id else None
+        if not notify_channel:
+            continue
+
+        users = load_data(guild.id)
+        ranking = sorted(
+            [
+                (uid, info)
+                for uid, info in users.items()
+                if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("weekly_xp", 0) > 0
+            ],
+            key=lambda x: x[1].get("weekly_xp", 0),
+            reverse=True
+        )
+
+        if not ranking:
+            continue
+
+        text = ""
+        for i, (uid, info) in enumerate(ranking[:10], start=1):
+            weekly_xp = info.get("weekly_xp", 0)
+            level     = info.get("level", 1)
+            icon      = medals[i - 1] if i <= 3 else f"{i}."
+            text += f"{icon} <@{uid}> | Lv{level} | **{weekly_xp:,} XP**\n"
+
+        embed = discord.Embed(
+            title="📅 今週のサーバー内XPランキング TOP10",
+            description=text,
+            color=discord.Color.orange()
+        )
+        embed.set_footer(text=f"{now.strftime('%Y/%m/%d')} 21:00 時点 ／ 月曜リセット")
+
+        try:
+            await notify_channel.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+# =========================
 # 週ボス：ラストチャンス通知（日曜22時）
 # ボスがまだ生きている場合のみ通知
 # =========================
@@ -4715,6 +4778,8 @@ async def on_ready():
         boss_spawn_task.start()
     if not boss_damage_report.is_running():
         boss_damage_report.start()
+    if not weeklytop_notify_task.is_running():
+        weeklytop_notify_task.start()
     if not boss_last_chance_task.is_running():
         boss_last_chance_task.start()
     if not server_ranking_task.is_running():
