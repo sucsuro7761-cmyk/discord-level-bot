@@ -1133,6 +1133,59 @@ async def top(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 # =========================
+# /weeklytop
+# =========================
+@bot.tree.command(name="weeklytop", description="今週のサーバー内XPランキングTOP10")
+async def weeklytop(interaction: discord.Interaction):
+    await interaction.response.defer()
+    users = load_data(interaction.guild.id)
+    my_id = str(interaction.user.id)
+
+    ranking = sorted(
+        [
+            (uid, info)
+            for uid, info in users.items()
+            if uid != LAST_DECAY_KEY and isinstance(info, dict) and info.get("weekly_xp", 0) > 0
+        ],
+        key=lambda x: x[1].get("weekly_xp", 0),
+        reverse=True
+    )
+
+    if not ranking:
+        await interaction.followup.send("📭 今週はまだXPを獲得したメンバーがいません。")
+        return
+
+    embed = discord.Embed(
+        title="📅 今週のXPランキング TOP10",
+        description="今週（月曜リセット）の獲得XP順です。",
+        color=discord.Color.orange()
+    )
+    medals = ["🥇", "🥈", "🥉"]
+    text = ""
+
+    for i, (uid, info) in enumerate(ranking[:10], start=1):
+        weekly_xp = info.get("weekly_xp", 0)
+        level     = info.get("level", 1)
+        icon      = medals[i - 1] if i <= 3 else f"{i}."
+        line      = f"{icon} <@{uid}> | Lv{level} | **{weekly_xp:,} XP**"
+        text += f"**{line}**\n" if uid == my_id else f"{line}\n"
+
+    my_rank = next((i + 1 for i, (uid, _) in enumerate(ranking) if uid == my_id), None)
+    if my_rank and my_rank > 10:
+        my_info   = users.get(my_id, {})
+        my_weekly = my_info.get("weekly_xp", 0)
+        my_level  = my_info.get("level", 1)
+        text += f"\n･ ･ ･ ･ ･ ･ ･ ･ ･ ･\n"
+        text += f"**{my_rank}.** <@{my_id}> | Lv{my_level} | **{my_weekly:,} XP**"
+    elif not my_rank:
+        text += f"\n･ ･ ･ ･ ･ ･ ･ ･ ･ ･\n"
+        text += f"**圏外** <@{my_id}> | 今週はまだXP未獲得"
+
+    embed.description = text
+    embed.set_footer(text="毎週月曜にリセット")
+    await interaction.followup.send(embed=embed)
+
+# =========================
 # /myxp
 # =========================
 @bot.tree.command(name="myxp", description="自分のXPやレベルを確認")
